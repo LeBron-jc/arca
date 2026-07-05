@@ -23,7 +23,7 @@ int main(int argc, char **argv)
     signal(SIGINT,  sig_handler);
     signal(SIGTERM, sig_handler);
 
-    const char *cfg_path = "/home/cuijian/arca/arca.conf";
+    const char *cfg_path = "arca.conf";
     if (argc > 1) cfg_path = argv[1];
     Config cfg(cfg_path);
 

@@ -24,33 +24,35 @@
 
 ```
 arca/
-├── arca.cpp              入口 main（4 Skills 注册 + 主循环）
-├── arca.h                共享类型（task_event, task_class, stats_val）
-├── arca.conf             可调参数配置（INI 格式）
-│
-├── skill.h               抽象 Skill 基类（init/start/stop/collect/policy/act）
-├── skill_manager.h       生命周期管理 + 状态展示
-├── dashboard.h           终端实时面板（ANSI 彩色）
-├── config.h              INI 解析器（零依赖）
-│
-├── cpu_skill.h/cpp       CPU 调度 Skill：评分分类 + vtime SCX
-├── arca_trace.bpf.c      eBPF: sched_switch + sched_wakeup tracepoint
-├── arca_sched.bpf.c      eBPF: SCX struct_ops（vtime 公平 + 抢占）
-├── arca_sched.h          DSQ ID 定义
-├── arca_scx_ops.c        C 包装：SCX open/load/attach/reuse_map
-│
-├── network_skill.h/cpp   网络策略 Skill
-├── network_trace.bpf.c   eBPF: kprobe tcp_sendmsg + tcp_cleanup_rbuf
-│
-├── resource_skill.h/cpp  资源管控 Skill（cgroup + /proc 采集）
-│
-├── security_skill.h/cpp  安全策略 Skill
-├── security_trace.bpf.c  eBPF: kprobe __x64_sys_execve
-│
-├── workload.c            混合压测（CPU-bound + Interactive + Batch）
-├── bench.sh              CFS vs scx_simple vs ARCA 对比脚本
-└── Makefile
-```
+├── README.md
+├── arca.conf              # 可调参数配置 (INI)
+├── Makefile
+├── include/               # 共享头文件
+│   ├── arca.h             # 类型定义
+│   ├── arca_sched.h       # SCX DSQ 常量
+│   ├── skill.h            # Skill 抽象基类
+│   ├── skill_manager.h    # 生命周期管理
+│   ├── dashboard.h        # ANSI 终端面板
+│   └── config.h           # INI 解析器
+├── src/
+│   └── arca.cpp           # 主入口
+├── skills/
+│   ├── cpu/               # CPU 调度 Skill
+│   │   ├── cpu_skill.h / .cpp
+│   │   ├── arca_trace.bpf.c    (eBPF 采集)
+│   │   ├── arca_sched.bpf.c    (eBPF SCX 调度)
+│   │   └── arca_scx_ops.c      (C 包装)
+│   ├── network/           # 网络策略 Skill
+│   │   ├── network_skill.h / .cpp
+│   │   └── network_trace.bpf.c  (eBPF)
+│   ├── resource/          # 资源管控 Skill
+│   │   └── resource_skill.h / .cpp
+│   └── security/          # 安全策略 Skill
+│       ├── security_skill.h / .cpp
+│       └── security_trace.bpf.c  (eBPF)
+└── tools/
+    ├── workload.c          # 混合压测
+    └── bench.sh           # 对比脚本
 
 ## 各 Skill 功能
 
@@ -96,9 +98,10 @@ BATCH       = 中唤醒率 + 长运行 + 规律模式
 
 ```bash
 cd /home/cuijian/arca
-make                          # 构建所有组件
-sudo ./arca                   # 启动 4 Skills + 终端 Dashboard
-sudo ./arca arca.conf        # 指定配置文件
+make                          # 构建到 bin/
+sudo ./bin/arca               # 启动 4 Skills + 终端 Dashboard
+sudo ./bin/arca arca.conf    # 指定配置文件
+sudo ./tools/bench.sh        # CFS vs ARCA 性能对比
 ```
 
 Dashboard 刷新示例：

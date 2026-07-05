@@ -1,10 +1,5 @@
+bin/
 *.o
 *.skel.h
-*.l1.o
-*.l2.o
-*.l3.o
-arca_sched
-arca_agent*
-arca
-workload
 bench_results/
+/tmp/*.o
