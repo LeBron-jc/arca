@@ -37,7 +37,7 @@ BPF_BASE := -g -O2 -Wall -target bpf -mcpu=v3 -D__TARGET_ARCH_x86 -mlittle-endia
 	$(INC) -I$(VMLINUX_DIR) \
 	-idirafter $(CLANG_INC) -idirafter /usr/local/include -idirafter /usr/include
 
-all: bin/arca bin/workload
+all: bin/arca bin/workload skills/cpu/arca_trace.bpf.o
 
 bin:
 	mkdir -p bin

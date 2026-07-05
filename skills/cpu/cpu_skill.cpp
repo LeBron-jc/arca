@@ -25,7 +25,8 @@ int CPUSchedSkill::handle_event_cb(void *ctx, void *data, size_t sz)
 
 int CPUSchedSkill::init()
 {
-    trace_obj_ = bpf_object__open("skills/cpu/arca_trace.bpf.o");
+    std::string bpfo = cfg_.get_str("cpu.bpf_object", "skills/cpu/arca_trace.bpf.o");
+    trace_obj_ = bpf_object__open(bpfo.c_str());
     if (!trace_obj_) { fprintf(stderr, "CPU: open trace BPF failed\n"); return -1; }
     if (bpf_object__load(trace_obj_)) { fprintf(stderr, "CPU: load trace BPF failed\n"); return -1; }
 
