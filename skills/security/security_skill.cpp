@@ -1,6 +1,11 @@
 #include <cstdio>
 #include <cstring>
 #include <unistd.h>
+
+extern "C" {
+#include <bpf/bpf.h>
+#include <bpf/libbpf.h>
+}
 #include "security_skill.h"
 #include "security_skill.skel.h"
 
@@ -15,18 +20,35 @@ struct exec_event_raw {
 
 int SecurityPolicySkill::handle_event_cb(void *ctx, void *data, size_t sz)
 {
-    auto *skill = static_cast<SecurityPolicySkill *>(ctx);
+    auto *s = static_cast<SecurityPolicySkill *>(ctx);
     auto *e = static_cast<exec_event_raw *>(data);
     if (sz < sizeof(exec_event_raw)) return 0;
 
-    skill->exec_count_++;
+    s->exec_count_++;
 
     uint32_t pid = e->pid;
-    auto &info = skill->execs_[pid];
+    auto &info = s->execs_[pid];
     info.last_seen = e->timestamp;
     info.filename = std::string(e->filename);
     info.comm = std::string(e->comm);
     info.count++;
+
+    /* detect suspicious paths */
+    if (info.filename.find("/tmp/") == 0 || info.filename.find("/dev/shm/") == 0) {
+        info.alerted = true;
+        s->alert_count_++;
+        printf("[SEC] ALERT pid=%u comm=%s file=%s\n", pid, info.comm.c_str(), info.filename.c_str());
+    }
+
+    /* detect shell interpreters with suspicious args */
+    if (info.comm == "bash" || info.comm == "sh" || info.comm == "dash") {
+        if (info.filename.find("curl") != std::string::npos ||
+            info.filename.find("wget")  != std::string::npos) {
+            info.alerted = true;
+            s->alert_count_++;
+            printf("[SEC] ALERT pid=%u shell downloading: %s\n", pid, info.filename.c_str());
+        }
+    }
 
     return 0;
 }
@@ -69,6 +91,13 @@ int SecurityPolicySkill::collect()
 
 int SecurityPolicySkill::policy()
 {
+    /* read alert counter from BPF map */
+    if (alert_fd_ >= 0) {
+        u32 zero = 0;
+        u64 cnt = 0;
+        bpf_map_lookup_elem(alert_fd_, &zero, &cnt);
+        alert_count_ = cnt;
+    }
     return 0;
 }
 
@@ -80,9 +109,9 @@ int SecurityPolicySkill::act()
 std::vector<SkillMetrics> SecurityPolicySkill::metrics()
 {
     return {
-        {"execs",    (double)exec_count_, "cnt", "Total exec calls"},
+        {"execs",     (double)exec_count_, "cnt", "Total exec calls"},
         {"processes", (double)execs_.size(), "cnt", "Unique PIDs"},
-        {"alerts",   (double)alert_count_, "cnt", "Security alerts"},
+        {"alerts",    (double)alert_count_, "cnt", "Security alerts"},
     };
 }
 

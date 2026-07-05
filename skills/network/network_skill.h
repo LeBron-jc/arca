@@ -8,18 +8,19 @@
 
 namespace arca {
 
-struct net_flow {
-    uint32_t pid;
-    uint64_t bytes;
-    uint64_t packets;
+struct net_flow_info {
+    uint64_t tx_bytes;
+    uint64_t rx_bytes;
     uint64_t last_seen;
+    uint64_t total_events;
+    bool blocked;
     char comm[16];
 };
 
 class NetworkPolicySkill : public Skill {
 public:
     NetworkPolicySkill() : Skill("NetworkPolicy", SkillType::NETWORK_POLICY),
-        obj_(nullptr), ring_fd_(-1), map_fd_(-1) {}
+        obj_(nullptr), rb_(nullptr), block_fd_(-1) {}
 
     int init() override;
     int start() override;
@@ -32,15 +33,16 @@ public:
 
 private:
     struct bpf_object *obj_;
-    int ring_fd_;
-    int map_fd_;
+    struct ring_buffer *rb_;
+    int block_fd_;
 
-    uint64_t total_bytes_ = 0;
-    uint64_t total_packets_ = 0;
-    uint64_t blocked_flows_ = 0;
-    std::unordered_map<uint32_t, net_flow> flows_;
+    uint64_t total_tx_ = 0, total_rx_ = 0;
+    uint64_t total_blocked_ = 0;
+    std::unordered_map<uint32_t, net_flow_info> flows_;
+
+    static int handle_event_cb(void *ctx, void *data, size_t sz);
+    void block_pid(uint32_t pid);
 };
 
 } // namespace arca
-
 #endif
