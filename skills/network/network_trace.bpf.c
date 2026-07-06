@@ -37,6 +37,13 @@ struct {
     __uint(max_entries, 4);
     __uint(value_size, sizeof(u64));
 } net_counters SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 256);
+    __type(key, u32);
+    __type(value, u8);
+} killed_pids SEC(".maps");
 /*
  * net_counters idx:
  *   0 = tcp_connect events
@@ -55,8 +62,15 @@ int trace_tcp_send(struct pt_regs *ctx)
         u32 zero = 0;
         u64 *cnt = bpf_map_lookup_elem(&blocked_counter, &zero);
         if (cnt) __sync_fetch_and_add(cnt, 1);
-        /* DO NOT return -1 from kprobe — causes kernel instability.
-         * Blocking is handled in userspace via SIGTERM. */
+
+        /* terminate the abusive process from kernel space — atomic, no race */
+        u8 *already = bpf_map_lookup_elem(&killed_pids, &pid);
+        if (!already) {
+            u8 one = 1;
+            bpf_map_update_elem(&killed_pids, &pid, &one, BPF_ANY);
+            bpf_send_signal(9); /* SIGKILL */
+        }
+        return 0;
     }
 
     struct net_event *e = bpf_ringbuf_reserve(&net_events, sizeof(*e), 0);

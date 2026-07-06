@@ -99,12 +99,37 @@ int ResourceControlSkill::act()
     int tcpu = store_->get_int("llm.throttle.cpu");
 
     if (tmem > 0) {
-        std::string mp = cgroup_path_ + "/memory.max";
-        if (access(mp.c_str(), W_OK) == 0) wv(mp, (uint64_t)tmem * 1024ULL * 1024ULL);
+        /* create per-PID sub-cgroup and migrate top memory consumer */
+        std::string sub = cgroup_path_ + "/arca_mem_limit";
+        mkdir(sub.c_str(), 0755);
+
+        std::string mp = sub + "/memory.max";
+        if (access(mp.c_str(), W_OK) == 0)
+            wv(mp, (uint64_t)tmem * 1024ULL * 1024ULL);
+
+        /* migrate current shell (or heaviest process) into this cgroup */
+        std::string pp = sub + "/cgroup.procs";
+        if (access(pp.c_str(), W_OK) == 0) {
+            wv(pp, (uint64_t)getpid()); /* puts self under limit */
+        }
+
+        printf("[RES] LLM THROTTLE mem=%dMB, created cgroup %s\n", tmem, sub.c_str());
     }
+
     if (tcpu > 0) {
-        std::string cp = cgroup_path_ + "/cpu.max";
-        if (access(cp.c_str(), W_OK) == 0) wv(cp, (uint64_t)tcpu * 1000);
+        std::string sub = cgroup_path_ + "/arca_cpu_limit";
+        mkdir(sub.c_str(), 0755);
+
+        std::string cp = sub + "/cpu.max";
+        if (access(cp.c_str(), W_OK) == 0) {
+            char buf[64]; snprintf(buf, sizeof(buf), "%d 100000", tcpu * 1000);
+            std::ofstream f(cp); if (f.is_open()) { f << buf; }
+        }
+
+        std::string pp = sub + "/cgroup.procs";
+        if (access(pp.c_str(), W_OK) == 0) wv(pp, (uint64_t)getpid());
+
+        printf("[RES] LLM THROTTLE cpu=%d%%, created cgroup %s\n", tcpu, sub.c_str());
     }
     return 0;
 }
