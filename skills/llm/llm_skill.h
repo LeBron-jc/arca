@@ -6,6 +6,7 @@
 #include <cstdio>
 #include "skill.h"
 #include "shared_store.h"
+#include "config.h"
 #include "arca.h"
 
 namespace arca {
@@ -19,9 +20,9 @@ struct llm_decision {
 
 class LLMDecisionSkill : public Skill {
 public:
-    LLMDecisionSkill(SharedStore *store)
+    LLMDecisionSkill(SharedStore *store, const Config &cfg)
         : Skill("LLMDecision", SkillType::CUSTOM),
-          store_(store), class_map_fd_(-1),
+          store_(store), cfg_(cfg), class_map_fd_(-1),
           call_count_(0), last_call_time_(0) {}
 
     int init() override;
@@ -34,6 +35,7 @@ public:
 
 private:
     SharedStore *store_;
+    Config cfg_;
     int class_map_fd_;
     int call_count_;
     time_t last_call_time_;

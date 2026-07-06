@@ -28,9 +28,10 @@ static std::string json_escape(const std::string &s)
 
 int LLMDecisionSkill::init()
 {
-    const char *api_key = getenv("DEEPSEEK_API_KEY");
-    if (!api_key) {
-        set_status("disabled: DEEPSEEK_API_KEY not set");
+    std::string api_key = cfg_.get_str("llm.api_key", "");
+    if (api_key.empty()) api_key = getenv("DEEPSEEK_API_KEY") ?: "";
+    if (api_key.empty()) {
+        set_status("disabled: set llm.api_key in arca.conf or DEEPSEEK_API_KEY env");
         return 0;
     }
     return 0;
@@ -99,11 +100,13 @@ STATUS: normal
 
 std::string LLMDecisionSkill::call_deepseek_api(const std::string &prompt)
 {
-    const char *api_key = getenv("DEEPSEEK_API_KEY");
-    if (!api_key) return "";
+    std::string api_key = cfg_.get_str("llm.api_key", "");
+    if (api_key.empty()) api_key = getenv("DEEPSEEK_API_KEY") ?: "";
+    if (api_key.empty()) return "";
 
     /* write request body to temp file to avoid shell command length limit */
-    std::string json_body = R"({"model":"deepseek-chat","messages":[)";
+    std::string model = cfg_.get_str("llm.model", "deepseek-chat");
+    std::string json_body = "{\"model\":\"" + model + "\",\"messages\":[";
     json_body += R"({"role":"system","content":"You are an OS scheduling expert. Respond concisely."},)";
     json_body += R"({"role":"user","content":")";
     json_body += json_escape(prompt);
@@ -240,7 +243,8 @@ int LLMDecisionSkill::policy()
 
     /* rate limit: max 1 call per 5 seconds */
     time_t now = time(NULL);
-    if (now - last_call_time_ < 5) return 0;
+    int interval = cfg_.get_int("llm.call_interval_sec", 10);
+    if (now - last_call_time_ < interval) return 0;
 
     std::string prompt = build_prompt();
     std::string response = call_deepseek_api(prompt);

@@ -1,0 +1,23 @@
+[Unit]
+Description=ARCA - Adaptive Resource Control Agent
+Documentation=https://github.com/LeBron-jc/arca
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/cuijian/arca
+Environment=LD_LIBRARY_PATH=/tmp/opencode/scx-build/build/obj/libbpf
+Environment=DEEPSEEK_API_KEY=
+ExecStart=/home/cuijian/arca/bin/arca /home/cuijian/arca/arca.conf
+ExecStop=/usr/bin/kill $(pidof arca)
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=no
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_BPF CAP_NET_ADMIN CAP_PERFMON
+AmbientCapabilities=CAP_SYS_ADMIN CAP_BPF CAP_NET_ADMIN CAP_PERFMON
+
+[Install]
+WantedBy=multi-user.target

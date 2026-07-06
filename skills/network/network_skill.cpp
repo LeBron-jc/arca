@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstring>
+#include <csignal>
 #include <ctime>
 #include <unistd.h>
 
@@ -115,6 +116,14 @@ int NetworkPolicySkill::policy()
 
 int NetworkPolicySkill::act()
 {
+    /* kill blocked PIDs from userspace (safer than return -1 from kprobe) */
+    for (auto &kv : flows_) {
+        if (kv.second.blocked && kv.second.tx_bytes > 0) {
+            kill(kv.first, SIGTERM);
+            printf("[NET] KILL pid=%u (blocked, tx=%luB)\n",
+                   kv.first, kv.second.tx_bytes);
+        }
+    }
     return 0;
 }
 

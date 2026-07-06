@@ -44,7 +44,7 @@ int main(int argc, char **argv)
     auto sec_skill = std::make_shared<SecurityPolicySkill>();
     mgr.register_skill(sec_skill);
 
-    auto llm_skill = std::make_shared<LLMDecisionSkill>(store);
+    auto llm_skill = std::make_shared<LLMDecisionSkill>(store, cfg);
     mgr.register_skill(llm_skill);
 
     if (mgr.init_all() != 0) {
