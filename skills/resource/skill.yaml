@@ -1,0 +1,61 @@
+name: ResourceCtrl
+version: "1.0"
+category: resource
+description: >
+  资源管控Agent。通过/proc和cgroup文件系统实时监控系统级
+  内存、CPU、IO和OOM事件，超阈值自动应用cgroup限制策略。
+
+workload_perception:
+  method: system_filesystem
+  sources:
+    - /proc/meminfo       # 系统内存使用
+    - /proc/stat          # CPU使用率（delta计算）
+    - /sys/fs/cgroup/*    # cgroup v1/v2 子系统
+  features:
+    - memory_usage_mb      # 已用内存（Total - Available）
+    - cpu_usage_percent    # CPU使用率
+    - oom_event_count      # OOM事件计数
+    - io_read_bytes        # IO读取量
+    - io_write_bytes       # IO写入量
+
+policy:
+  memory_alert:
+    trigger: memory_usage > threshold_mb
+    status: "ALERT: high memory"
+    action: >
+      写入cgroup memory.max为阈值的90%，
+      限制后续内存分配
+  cpu_alert:
+    trigger: cpu_usage > threshold_pct
+    status: "ALERT: high CPU"
+    action: >
+      写入cgroup cpu.max为50000(50%单核)，
+      限制CPU占用
+
+parameters:
+  - name: memory_alert_mb
+    type: int
+    default: 6144
+    description: 内存告警阈值(MB)
+  - name: cpu_alert_pct
+    type: int
+    range: [1, 100]
+    default: 95
+    description: CPU告警阈值(%)
+
+metrics:
+  - name: mem_usage_mb
+    description: 当前内存使用(MB)
+  - name: cpu_usage_pct
+    description: 当前CPU使用率(%)
+  - name: oom_events
+    description: OOM事件计数
+
+kernel_requirements:
+  min_version: "4.0"
+  features:
+    - cgroup_v1 or cgroup_v2
+  
+notes: |
+  cgroup路径自动检测(v1/v2)。cgroup写入需要root权限。
+  在非特权容器中act()可能静默失败。

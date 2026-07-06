@@ -1,0 +1,60 @@
+name: NetworkPolicy
+version: "1.0"
+category: network
+description: >
+  网络策略Agent。通过eBPF kprobe监控进程级TCP流量，
+  自动检测并阻断超阈值带宽占用进程，支持手动PID阻断。
+
+workload_perception:
+  method: eBPF kprobe
+  hooks:
+    - tcp_sendmsg      # 发送数据 → 捕获TX字节数
+    - tcp_cleanup_rbuf # 接收数据 → 捕获RX字节数
+  features:
+    - tx_bytes_per_second  # 上行速率
+    - rx_bytes_per_second  # 下行速率
+    - active_flows         # 活跃连接数
+
+policy:
+  auto_block:
+    trigger: tx_rate > 1MB/s AND events > 100
+    action: write PID to block_list BPF map
+    effect: kprobe返回-1，阻断后续send调用
+  manual_block:
+    api: block_pid(pid) / unblock_pid(pid)
+
+bpfs:
+  maps:
+    - name: net_events
+      type: BPF_MAP_TYPE_RINGBUF
+      description: 网络事件流（tx/rx + 字节数）
+    - name: block_list
+      type: BPF_MAP_TYPE_HASH
+      key: pid(u32)
+      value: blocked_flag(u8)
+      description: 阻断名单，kprobe每次send前检查
+    - name: blocked_counter
+      type: BPF_MAP_TYPE_ARRAY
+      description: 被阻断请求计数器
+
+parameters:
+  - name: block_threshold_bytes_per_sec
+    type: int
+    default: 1000000
+    description: 自动阻断流量阈值(字节/秒)
+
+metrics:
+  - name: tx_bytes
+    description: 总发送字节数
+  - name: rx_bytes
+    description: 总接收字节数
+  - name: active_flows
+    description: 活跃连接数
+  - name: blocked_pids
+    description: 被阻断PID数
+
+kernel_requirements:
+  min_version: "5.5"
+  config:
+    - CONFIG_BPF_SYSCALL=y
+    - CONFIG_KPROBES=y

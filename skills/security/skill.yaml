@@ -1,0 +1,67 @@
+name: SecurityPolicy
+version: "1.0"
+category: security
+description: >
+  安全策略Agent。通过eBPF kprobe监控所有execve系统调用，
+  检测可疑进程执行行为（临时目录执行、Shell下载器调用），
+  实时告警并记录异常PID。
+
+workload_perception:
+  method: eBPF kprobe
+  hooks:
+    - __x64_sys_execve  # 进程执行 → 捕获文件名+命令行
+  features:
+    - exec_count       # 执行调用总数
+    - unique_pids      # 唯一进程ID数
+    - suspicious_paths  # 可疑路径执行（/tmp, /dev/shm）
+    - shell_download    # Shell下载器模式（bash+curl/wget）
+
+detection_rules:
+  - rule: tmp_execution
+    pattern: filename starts with "/tmp/" or "/dev/shm/"
+    severity: HIGH
+    action: alert + record PID
+    description: 临时目录执行通常是恶意软件投递的第一阶段
+  
+  - rule: shell_downloader
+    pattern: comm in [bash,sh,dash] AND filename contains [curl,wget]
+    severity: MEDIUM
+    action: alert + record PID
+    description: Shell启动下载器，可能是C2通信或横向移动
+
+bpfs:
+  maps:
+    - name: sec_events
+      type: BPF_MAP_TYPE_RINGBUF
+      description: 进程执行事件流
+    - name: alert_counter
+      type: BPF_MAP_TYPE_ARRAY
+      description: 告警计数器
+
+graceful_degradation: >
+  若kprobe因内核权限/配置问题加载失败，
+  Agent自动降级为"disabled"状态，不影响其他Skill运行。
+
+parameters:
+  - name: monitor_tmp_exec
+    type: bool
+    default: true
+    description: 监控/tmp路径执行
+  - name: monitor_shell_download
+    type: bool
+    default: true
+    description: 监控Shell下载器模式
+
+metrics:
+  - name: total_execs
+    description: 进程执行总数
+  - name: unique_processes
+    description: 唯一进程数
+  - name: alerts
+    description: 安全告警总数
+
+kernel_requirements:
+  min_version: "5.5"
+  config:
+    - CONFIG_BPF_SYSCALL=y
+    - CONFIG_KPROBES=y

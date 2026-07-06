@@ -1,0 +1,89 @@
+name: CPUSched
+version: "1.0"
+category: scheduling
+description: >
+  CPU调度优化Agent。通过eBPF tracepoint感知workload行为模式，
+  利用sched_ext进行vtime加权公平调度，对INTERACTIVE任务执行
+  抢占式立即调度，降低交互式工作负载的唤醒延迟。
+
+workload_perception:
+  method: eBPF tracepoint
+  events:
+    - sched_switch  # 上下文切换 → 运行时长统计
+    - sched_wakeup  # 任务唤醒 → 唤醒频率统计
+  features:
+    - avg_runtime_ns    # 平均单次运行时长
+    - avg_wait_time_ns   # 平均等待时长
+    - wakeup_rate        # 唤醒频率
+    - switch_count       # 调度次数
+    - cpu_migration_count # CPU迁移次数
+
+classification:
+  method: scoring_based
+  classes:
+    - name: INTERACTIVE
+      score: high_wakeup + short_runtime + low_wait
+      description: 交互式应用（Shell、编辑器、GUI）
+    - name: CPU_BOUND
+      score: low_wakeup + long_runtime + few_migration
+      description: 计算密集型（编译、视频编码、科学计算）
+    - name: BATCH
+      score: moderate_wakeup + long_runtime + regular_pattern
+      description: 批处理（日志处理、ETL、定时任务）
+
+scheduling:
+  engine: sched_ext (SCX)
+  method: vtime_weighted_fair_queuing
+  priority:
+    INTERACTIVE:
+      select_cpu: idle_first + SCX_DSQ_LOCAL + SCX_KICK_PREEMPT
+      slice: 1ms
+    CPU_BOUND:
+      select_cpu: cache_affinity (prev_cpu)
+      slice: 10ms
+    BATCH:
+      select_cpu: any
+      slice: 20ms
+  dsq: SHARED_DSQ (vtime ordered)
+
+parameters:
+  - name: interactive_min_score
+    type: double
+    range: [0.0, 1.0]
+    default: 0.4
+    description: INTERACTIVE分类最低置信度
+  - name: interactive_slice_us
+    type: int
+    range: [100, 10000]
+    default: 1000
+    description: INTERACTIVE时间片(微秒)
+  - name: cpu_bound_slice_us
+    type: int
+    range: [1000, 100000]
+    default: 10000
+    description: CPU_BOUND时间片(微秒)
+  - name: batch_slice_us
+    type: int
+    range: [1000, 100000]
+    default: 20000
+    description: BATCH时间片(微秒)
+  - name: decay_ratio
+    type: double
+    range: [0.5, 0.95]
+    default: 0.75
+    description: 统计衰减系数
+
+metrics:
+  - name: interactive_latency_us
+    description: 交互式任务平均唤醒延迟
+  - name: events_per_second
+    description: eBPF事件采集速率
+  - name: classified_tasks
+    description: 已分类任务数（按类型分布）
+
+kernel_requirements:
+  min_version: "6.6"
+  config:
+    - CONFIG_SCHED_CLASS_EXT=y
+    - CONFIG_BPF_SYSCALL=y
+    - CONFIG_DEBUG_INFO_BTF=y
