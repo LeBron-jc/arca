@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <string>
 #include "skill.h"
+#include "shared_store.h"
 
 namespace arca {
 
@@ -19,8 +20,8 @@ struct net_flow_info {
 
 class NetworkPolicySkill : public Skill {
 public:
-    NetworkPolicySkill() : Skill("NetworkPolicy", SkillType::NETWORK_POLICY),
-        obj_(nullptr), rb_(nullptr), block_fd_(-1) {}
+    NetworkPolicySkill(SharedStore *store = nullptr) : Skill("NetworkPolicy", SkillType::NETWORK_POLICY),
+        obj_(nullptr), rb_(nullptr), block_fd_(-1), store_(store) {}
 
     int init() override;
     int start() override;
@@ -35,13 +36,13 @@ private:
     struct bpf_object *obj_;
     struct ring_buffer *rb_;
     int block_fd_;
+    SharedStore *store_;
 
     uint64_t total_tx_ = 0, total_rx_ = 0;
     uint64_t total_blocked_ = 0, total_retransmit_ = 0, total_connects_ = 0;
     std::unordered_map<uint32_t, net_flow_info> flows_;
 
     static int handle_event_cb(void *ctx, void *data, size_t sz);
-    void block_pid(uint32_t pid);
 };
 
 } // namespace arca

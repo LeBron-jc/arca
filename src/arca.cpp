@@ -35,13 +35,13 @@ int main(int argc, char **argv)
     auto cpu_skill = std::make_shared<CPUSchedSkill>(cfg, store);
     mgr.register_skill(cpu_skill);
 
-    auto net_skill = std::make_shared<NetworkPolicySkill>();
+    auto net_skill = std::make_shared<NetworkPolicySkill>(store);
     mgr.register_skill(net_skill);
 
     auto res_skill = std::make_shared<ResourceControlSkill>(cfg, store);
     mgr.register_skill(res_skill);
 
-    auto sec_skill = std::make_shared<SecurityPolicySkill>();
+    auto sec_skill = std::make_shared<SecurityPolicySkill>(store);
     mgr.register_skill(sec_skill);
 
     auto llm_skill = std::make_shared<LLMDecisionSkill>(store, cfg);

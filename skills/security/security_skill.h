@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include "skill.h"
+#include "shared_store.h"
 
 namespace arca {
 
@@ -19,8 +20,8 @@ struct exec_info {
 
 class SecurityPolicySkill : public Skill {
 public:
-    SecurityPolicySkill() : Skill("SecurityPolicy", SkillType::CUSTOM),
-        obj_(nullptr), ring_fd_(-1), alert_fd_(-1) {}
+    SecurityPolicySkill(SharedStore *store = nullptr) : Skill("SecurityPolicy", SkillType::CUSTOM),
+        obj_(nullptr), ring_fd_(-1), alert_fd_(-1), store_(store) {}
 
     int init() override;
     int start() override;
@@ -34,6 +35,7 @@ private:
     struct bpf_object *obj_;
     int ring_fd_;
     int alert_fd_;
+    SharedStore *store_;
 
     uint64_t exec_count_ = 0;
     uint64_t alert_count_ = 0;

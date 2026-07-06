@@ -11,9 +11,10 @@
 
 namespace arca {
 
-struct llm_decision {
+struct llm_command {
+    std::string type;     /* PRIORITY, BLOCK, THROTTLE, ALERT */
     int pid;
-    int priority;
+    int value;            /* priority value, or throttle value */
     std::string reason;
 };
 
@@ -40,9 +41,9 @@ private:
     time_t last_call_time_;
 
     std::string build_prompt();
-    std::string call_deepseek_api(const std::string &prompt);
-    std::vector<llm_decision> parse_response(const std::string &response);
-    void apply_decisions(const std::vector<llm_decision> &decisions);
+    std::string call_api(const std::string &prompt);
+    std::vector<llm_command> parse_response(const std::string &response);
+    void apply_commands(const std::vector<llm_command> &cmds);
 };
 
 } // namespace arca

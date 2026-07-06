@@ -11,15 +11,14 @@ extern "C" {
 
 namespace arca {
 
-static std::string json_escape(const std::string &s)
-{
+static std::string json_escape(const std::string &s) {
     std::string r;
     for (auto c : s) {
-        if (c == '"') { r += "\\\""; continue; }
+        if (c == '"')  { r += "\\\""; continue; }
         if (c == '\\') { r += "\\\\"; continue; }
-        if (c == '\n') { r += "\\n"; continue; }
-        if (c == '\r') { r += "\\r"; continue; }
-        if (c == '\t') { r += "\\t"; continue; }
+        if (c == '\n') { r += "\\n";  continue; }
+        if (c == '\r') { r += "\\r";  continue; }
+        if (c == '\t') { r += "\\t";  continue; }
         if (c < 0x20) continue;
         r += c;
     }
@@ -27,20 +26,18 @@ static std::string json_escape(const std::string &s)
 }
 
 static std::string rtrim(const std::string &s) {
-    auto end = s.find_last_not_of(" \t\n\r");
-    return end == std::string::npos ? "" : s.substr(0, end + 1);
+    auto e = s.find_last_not_of(" \t\n\r");
+    return e == std::string::npos ? "" : s.substr(0, e + 1);
 }
 
-int LLMDecisionSkill::init()
-{
-    std::string api_key = cfg_.get_str("llm.api_key", "");
-    if (api_key.empty()) api_key = getenv("DEEPSEEK_API_KEY") ?: "";
-    if (api_key.empty()) { set_status("no api key"); return 0; }
+int LLMDecisionSkill::init() {
+    std::string key = cfg_.get_str("llm.api_key", "");
+    if (key.empty()) key = getenv("DEEPSEEK_API_KEY") ?: "";
+    if (key.empty()) { set_status("no api key"); return 0; }
     return 0;
 }
 
-int LLMDecisionSkill::start()
-{
+int LLMDecisionSkill::start() {
     running_ = true;
     class_map_fd_ = bpf_obj_get("/sys/fs/bpf/task_class_map");
     return 0;
@@ -52,7 +49,8 @@ int LLMDecisionSkill::collect() { return 0; }
 std::string LLMDecisionSkill::build_prompt()
 {
     std::ostringstream ss;
-    ss << R"(You are a Linux kernel scheduling expert. Analyze system state and assign per-task CPU priorities.
+    ss << R"(You are the central decision engine for ARCA, an OS resource control agent.
+Based on the system state below, output management commands.
 
 ## System State
 )";
@@ -60,173 +58,210 @@ std::string LLMDecisionSkill::build_prompt()
 
     ss << R"(
 
-## Priority Scale
-- +80 to +100: Latency-critical (interactive shell, database, real-time). Must preempt.
-- +20 to +70:  Interactive (GUI, network server). Prefer idle CPU.
-- -20 to +20:  Normal (unclassified, mixed workload).
-- -50 to -20:  Batch (compilation, backup, log processing). Run in background.
-- -100 to -50: Idle/I/O blocked (waiting on disk/network). Lowest priority.
+## Your Role
+You manage FOUR subsystems. For each, output the appropriate commands:
 
-## Rules
-1. Network-heavy + low wakeup → probably a server → +60
-2. High io_ratio + low run_time → I/O blocked → -30
-3. High wakeup_rate + short run_time → interactive → +80
-4. Long run_time + low wakeup → CPU-bound → +10
-5. Newly forked + parent is high priority → inherit +40
-6. kthread → 0 (let kernel manage)
+### 1. CPU Scheduling (PRIORITY)
+Priority scale: +100(highest) to -100(lowest)
+Rules:
+- High wakeup + short runtime + low blocked time → +60 to +90 (interactive)
+- Low wakeup + long runtime + few migrations → +10 to +30 (CPU-bound)
+- High I/O blocked time → -30 to -10 (I/O blocked, don't waste CPU)
+- New task, no data → 0 (normal)
+- Server process (network heavy) → +50 to +70
 
-## Output Format (respond ONLY with these lines)
-PRIORITY: pid=<pid> priority=<int> reason=<one sentence>
-STATUS: <normal|alert|warning>
+### 2. Network Control (BLOCK)
+Block a PID from network when:
+- TX rate exceeds 10MB/s AND is not a known service
+- Retransmit count > 100 (network abuse)
+- Multiple connections from temp directory processes
+
+### 3. Resource Control (THROTTLE)
+Apply cgroup limits when:
+- Memory > 80% of total → THROTTLE mem with limit in MB
+- CPU > 90% sustained → THROTTLE cpu with percentage
+- OOM events detected → THROTTLE mem aggressively
+
+### 4. Security Alert (ALERT)
+Alert when:
+- Process executed from /tmp/ or /dev/shm/
+- Shell (bash/sh/dash) launching download tools (curl/wget)
+- Exit of a previously-alerted process
+
+## Output Format (one command per line)
+PRIORITY: pid=<pid> value=<int> reason=<sentence>
+BLOCK: pid=<pid> reason=<sentence>
+THROTTLE: type=<mem|cpu> value=<int> reason=<sentence>
+ALERT: pid=<pid> severity=<1-5> reason=<sentence>
+STATUS: <normal|alert>
 )";
     return ss.str();
 }
 
-std::string LLMDecisionSkill::call_deepseek_api(const std::string &prompt)
+std::string LLMDecisionSkill::call_api(const std::string &prompt)
 {
-    std::string api_key = cfg_.get_str("llm.api_key", "");
-    if (api_key.empty()) api_key = getenv("DEEPSEEK_API_KEY") ?: "";
-    if (api_key.empty()) return "";
+    std::string key = cfg_.get_str("llm.api_key", "");
+    if (key.empty()) key = getenv("DEEPSEEK_API_KEY") ?: "";
+    if (key.empty()) return "";
 
     std::string model = cfg_.get_str("llm.model", "deepseek-chat");
-    std::string json_body = "{\"model\":\"" + model + "\",\"messages\":[";
-    json_body += R"({"role":"system","content":"You are an OS scheduling expert. Output only PRIORITY lines."},)";
-    json_body += R"({"role":"user","content":")";
-    json_body += json_escape(prompt);
-    json_body += R"("}],"temperature":0.3,"max_tokens":2048})";
+    std::string body = "{\"model\":\"" + model + "\",\"messages\":[";
+    body += R"({"role":"system","content":"ARCA decision engine. Output only command lines."},)";
+    body += R"({"role":"user","content":")" + json_escape(prompt) + R"("}])";
+    body += ",\"temperature\":0.3,\"max_tokens\":2048}";
 
-    char tmpfile[256];
-    snprintf(tmpfile, sizeof(tmpfile), "/tmp/arca_llm_%d.json", getpid());
-    FILE *fp = fopen(tmpfile, "w");
+    char tmpf[256]; snprintf(tmpf, sizeof(tmpf), "/tmp/arca_llm_%d.json", getpid());
+    FILE *fp = fopen(tmpf, "w");
     if (!fp) return "";
-    fwrite(json_body.c_str(), 1, json_body.size(), fp);
-    fclose(fp);
+    fwrite(body.c_str(), 1, body.size(), fp); fclose(fp);
 
     std::ostringstream cmd;
     cmd << "curl -s -X POST https://api.deepseek.com/v1/chat/completions"
         << " -H \"Content-Type: application/json\""
-        << " -H \"Authorization: Bearer " << api_key << "\""
-        << " -d @" << tmpfile
-        << " --connect-timeout 10 --max-time 30 2>/dev/null";
+        << " -H \"Authorization: Bearer " << key << "\""
+        << " -d @" << tmpf << " --connect-timeout 10 --max-time 30 2>/dev/null";
 
     fp = popen(cmd.str().c_str(), "r");
-    if (!fp) { unlink(tmpfile); return ""; }
+    if (!fp) { unlink(tmpf); return ""; }
+    std::string r; char buf[4096];
+    while (fgets(buf, sizeof(buf), fp)) r += buf;
+    pclose(fp); unlink(tmpf);
 
-    std::string result;
-    char buf[4096];
-    while (fgets(buf, sizeof(buf), fp)) result += buf;
-    pclose(fp);
-    unlink(tmpfile);
-
-    call_count_++;
-    last_call_time_ = time(NULL);
-    return result;
+    call_count_++; last_call_time_ = time(NULL);
+    return r;
 }
 
-std::vector<llm_decision> LLMDecisionSkill::parse_response(const std::string &response)
+std::vector<llm_command> LLMDecisionSkill::parse_response(const std::string &response)
 {
-    std::vector<llm_decision> decisions;
-    if (response.empty()) return decisions;
+    std::vector<llm_command> cmds;
+    if (response.empty()) return cmds;
 
     auto pos = response.find("\"content\":\"");
     if (pos == std::string::npos) {
         pos = response.find("\"reasoning_content\":\"");
         if (pos != std::string::npos) pos += 22;
-    } else {
-        pos += 11;
-    }
-    if (pos == std::string::npos) return decisions;
+    } else pos += 11;
+    if (pos == std::string::npos) return cmds;
 
     std::string content;
     while (pos < response.size()) {
         char c = response[pos];
         if (c == '\\' && pos + 1 < response.size()) {
-            char nxt = response[pos + 1];
-            if (nxt == 'n') { content += '\n'; pos += 2; continue; }
-            if (nxt == 'r') { content += '\r'; pos += 2; continue; }
-            if (nxt == 't') { content += '\t'; pos += 2; continue; }
-            if (nxt == '"') { content += '"';  pos += 2; continue; }
-            if (nxt == '\\'){ content += '\\'; pos += 2; continue; }
-            content += nxt; pos += 2;
-        } else if (c == '"') {
-            break;
-        } else {
-            content += c; pos++;
-        }
+            char n = response[pos+1];
+            if      (n == 'n') { content += '\n'; pos += 2; continue; }
+            else if (n == 'r') { content += '\r'; pos += 2; continue; }
+            else if (n == 't') { content += '\t'; pos += 2; continue; }
+            else if (n == '"') { content += '"';  pos += 2; continue; }
+            else if (n == '\\'){ content += '\\'; pos += 2; continue; }
+            content += n; pos += 2;
+        } else if (c == '"') { break; }
+        else { content += c; pos++; }
     }
 
     std::istringstream iss(content);
     std::string line;
     while (std::getline(iss, line)) {
         line = rtrim(line);
-        if (line.compare(0, 9, "PRIORITY:") != 0) continue;
+        llm_command cmd = {};
+        bool valid = false;
 
-        llm_decision d = {};
-
-        auto p1 = line.find("pid=");
-        auto p2 = line.find(" priority=");
-        auto p3 = line.find(" reason=");
-
-        if (p1 != std::string::npos && p2 != std::string::npos) {
-            d.pid = atoi(line.c_str() + p1 + 4);
-            d.priority = atoi(line.c_str() + p2 + 10);
-            if (p3 != std::string::npos)
-                d.reason = rtrim(line.substr(p3 + 8));
-            if (d.pid > 0 && d.priority >= -100 && d.priority <= 100)
-                decisions.push_back(d);
+        if (line.compare(0, 9, "PRIORITY:") == 0) {
+            cmd.type = "PRIORITY";
+            auto p1 = line.find("pid="), p2 = line.find(" value="), p3 = line.find(" reason=");
+            if (p1 != std::string::npos && p2 != std::string::npos) {
+                cmd.pid = atoi(line.c_str() + p1 + 4);
+                cmd.value = atoi(line.c_str() + p2 + 7);
+                if (p3 != std::string::npos) cmd.reason = rtrim(line.substr(p3 + 8));
+                if (cmd.pid > 0 && cmd.value >= -100 && cmd.value <= 100) valid = true;
+            }
+        } else if (line.compare(0, 6, "BLOCK:") == 0) {
+            cmd.type = "BLOCK";
+            auto p1 = line.find("pid="), p2 = line.find(" reason=");
+            if (p1 != std::string::npos) {
+                cmd.pid = atoi(line.c_str() + p1 + 4);
+                if (p2 != std::string::npos) cmd.reason = rtrim(line.substr(p2 + 8));
+                if (cmd.pid > 0) valid = true;
+            }
+        } else if (line.compare(0, 9, "THROTTLE:") == 0) {
+            cmd.type = "THROTTLE";
+            auto p1 = line.find("type="), p2 = line.find(" value="), p3 = line.find(" reason=");
+            if (p1 != std::string::npos && p2 != std::string::npos) {
+                std::string t = line.substr(p1+5, p2-p1-5);
+                if (t == "mem") { cmd.pid = 1; } else { cmd.pid = 2; }
+                cmd.value = atoi(line.c_str() + p2 + 7);
+                if (p3 != std::string::npos) cmd.reason = rtrim(line.substr(p3 + 8));
+                if (cmd.value > 0) valid = true;
+            }
+        } else if (line.compare(0, 6, "ALERT:") == 0) {
+            cmd.type = "ALERT";
+            auto p1 = line.find("pid="), p2 = line.find(" severity="), p3 = line.find(" reason=");
+            if (p1 != std::string::npos) {
+                cmd.pid = atoi(line.c_str() + p1 + 4);
+                if (p2 != std::string::npos) cmd.value = atoi(line.c_str() + p2 + 10);
+                if (p3 != std::string::npos) cmd.reason = rtrim(line.substr(p3 + 8));
+                if (cmd.pid > 0) valid = true;
+            }
         }
+
+        if (valid) cmds.push_back(cmd);
     }
-    return decisions;
+    return cmds;
 }
 
-void LLMDecisionSkill::apply_decisions(const std::vector<llm_decision> &decisions)
+void LLMDecisionSkill::apply_commands(const std::vector<llm_command> &cmds)
 {
-    for (auto &d : decisions) {
-        if (class_map_fd_ < 0) continue;
-
-        int old_prio = 0;
-        bpf_map_lookup_elem(class_map_fd_, &d.pid, &old_prio);
-
-        if (old_prio != d.priority) {
-            bpf_map_update_elem(class_map_fd_, &d.pid, &d.priority, BPF_ANY);
-            printf("[LLM] pid=%d priority=%d (was %d) reason=%s\n",
-                   d.pid, d.priority, old_prio, d.reason.c_str());
+    for (auto &c : cmds) {
+        if (c.type == "PRIORITY") {
+            if (class_map_fd_ >= 0) {
+                int old; bpf_map_lookup_elem(class_map_fd_, &c.pid, &old);
+                if (old != c.value)
+                    bpf_map_update_elem(class_map_fd_, &c.pid, &c.value, BPF_ANY);
+            }
+            char k[64]; snprintf(k, sizeof(k), "llm.priority.%d", c.pid);
+            store_->put_int(k, c.value);
+            printf("[LLM] PRIORITY pid=%d val=%d %s\n", c.pid, c.value, c.reason.c_str());
+        } else if (c.type == "BLOCK") {
+            store_->put("llm.block." + std::to_string(c.pid), c.reason);
+            printf("[LLM] BLOCK pid=%d %s\n", c.pid, c.reason.c_str());
+        } else if (c.type == "THROTTLE") {
+            std::string key = c.pid == 1 ? "llm.throttle.mem" : "llm.throttle.cpu";
+            store_->put_int(key, c.value);
+            printf("[LLM] THROTTLE %s=%d %s\n",
+                   c.pid == 1 ? "mem" : "cpu", c.value, c.reason.c_str());
+        } else if (c.type == "ALERT") {
+            store_->put("llm.alert." + std::to_string(c.pid), c.reason);
+            printf("[LLM] ALERT pid=%d sev=%d %s\n", c.pid, c.value, c.reason.c_str());
         }
     }
 }
 
 int LLMDecisionSkill::policy()
 {
-    if (!store_ || store_->size() < 2) return 0;
+    if (!store_ || store_->size() < 5) return 0;
 
     int interval = cfg_.get_int("llm.call_interval_sec", 10);
     time_t now = time(NULL);
     if (now - last_call_time_ < interval) return 0;
 
     std::string prompt = build_prompt();
-    std::string response = call_deepseek_api(prompt);
-    if (response.empty()) { set_status("api call failed"); return 0; }
+    std::string response = call_api(prompt);
+    if (response.empty()) { set_status("api failed"); return 0; }
 
-    auto decisions = parse_response(response);
-    fprintf(stderr, "[LLM] #%d: %zu chars, %zu decisions\n",
-            call_count_, response.size(), decisions.size());
+    auto cmds = parse_response(response);
+    fprintf(stderr, "[LLM] #%d: %zu chars, %zu commands\n",
+            call_count_, response.size(), cmds.size());
 
-    apply_decisions(decisions);
+    apply_commands(cmds);
 
-    char buf[64];
-    snprintf(buf, sizeof(buf), "#%d, %zu priorities", call_count_, decisions.size());
+    char buf[64]; snprintf(buf, sizeof(buf), "#%d, %zu cmds", call_count_, cmds.size());
     set_status(buf);
     return 0;
 }
 
 int LLMDecisionSkill::act() { return 0; }
 
-std::vector<SkillMetrics> LLMDecisionSkill::metrics()
-{
-    return {
-        {"llm_calls", (double)call_count_, "cnt", "LLM API calls"},
-        {"last_call", (double)(time(NULL)-last_call_time_), "s", "Seconds since last call"},
-    };
+std::vector<SkillMetrics> LLMDecisionSkill::metrics() {
+    return {{"calls", (double)call_count_, "cnt", "API calls"}};
 }
 
 } // namespace arca
