@@ -74,25 +74,32 @@ void CPUSchedSkill::compute_features()
         uint32_t delta_migrate = val.cpu_migrations - snap.prev_migration;
         uint32_t delta_io_wait = val.io_wait_count - snap.prev_io_wait;
         uint32_t delta_d_state = val.d_state_count - snap.prev_d_state;
+        uint64_t delta_blocked = val.blocked_ns - snap.prev_blocked_ns;
+        uint64_t delta_queue   = val.wait_ns - snap.prev_queue_ns;
 
-        feat.avg_run_ns    = (feat.avg_run_ns * 7 + delta_run / (delta_switch ? delta_switch : 1)) / 8;
-        feat.avg_wait_ns   = (feat.avg_wait_ns * 7 + delta_wait / (delta_wake ? delta_wake : 1)) / 8;
-        feat.wakeup_rate   = delta_wake;
-        feat.switch_rate   = delta_switch;
+        feat.avg_run_ns     = (feat.avg_run_ns * 7 + delta_run / (delta_switch ? delta_switch : 1)) / 8;
+        feat.avg_wait_ns    = (feat.avg_wait_ns * 7 + delta_wait / (delta_wake ? delta_wake : 1)) / 8;
+        feat.avg_blocked_ns = (feat.avg_blocked_ns * 7 + delta_blocked / (delta_d_state + delta_io_wait ? delta_d_state + delta_io_wait : 1)) / 8;
+        feat.avg_queue_ns   = (feat.avg_queue_ns * 7 + delta_queue / (delta_switch ? delta_switch : 1)) / 8;
+        feat.wakeup_rate    = delta_wake;
+        feat.switch_rate    = delta_switch;
         feat.migration_rate = delta_migrate;
-        feat.io_wait_count = delta_io_wait;
-        feat.d_state_count = delta_d_state;
-        feat.is_kthread    = val.is_kthread;
-        feat.nice          = val.nice;
+        feat.io_wait_count  = delta_io_wait;
+        feat.d_state_count  = delta_d_state;
+        feat.is_kthread     = val.is_kthread;
+        feat.nice           = val.nice;
+        feat.parent_pid     = val.parent_pid;
         memcpy(feat.comm, val.comm, 16);
 
-        snap.prev_run_ns    = val.total_run_ns;
-        snap.prev_wait_ns   = val.total_wait_ns;
-        snap.prev_wakeup    = val.wakeup_count;
-        snap.prev_switch    = val.switch_count;
-        snap.prev_migration = val.cpu_migrations;
-        snap.prev_io_wait   = val.io_wait_count;
-        snap.prev_d_state   = val.d_state_count;
+        snap.prev_run_ns     = val.total_run_ns;
+        snap.prev_wait_ns    = val.total_wait_ns;
+        snap.prev_wakeup     = val.wakeup_count;
+        snap.prev_switch     = val.switch_count;
+        snap.prev_migration  = val.cpu_migrations;
+        snap.prev_io_wait    = val.io_wait_count;
+        snap.prev_d_state    = val.d_state_count;
+        snap.prev_blocked_ns = val.blocked_ns;
+        snap.prev_queue_ns   = val.wait_ns;
 
         prev_key = key;
     }
@@ -112,31 +119,38 @@ classify_score CPUSchedSkill::score_task(const task_features &feat)
     double switch_rate = (double)feat.switch_rate;
     double avg_run_ms = feat.avg_run_ns / 1000000.0;
     double avg_wait_ms = feat.avg_wait_ns / 1000000.0;
+    double avg_blocked_ms = feat.avg_blocked_ns / 1000000.0;
+    double avg_queue_ms = feat.avg_queue_ns / 1000000.0;
     double io_ratio = (feat.io_wait_count + feat.d_state_count) /
                       (double)(feat.switch_rate ? feat.switch_rate : 1);
 
     double min_score = cfg_.get_double("cpu.interactive_min_score", 0.4);
 
-    /* IO_BOUND: high I/O wait ratio */
+    /* IO_BOUND: precise blocked time > 50% of existence means I/O bottleneck */
+    if (avg_blocked_ms > 5.0 && avg_blocked_ms > avg_run_ms)
+        s.io_bound = min_score * 1.5;
     if (io_ratio > 0.5 && avg_run_ms < 5.0)
         s.io_bound = min_score * 1.2;
     if (io_ratio > 0.3 && feat.d_state_count > 0)
         s.io_bound += min_score * 0.6;
-    if (io_ratio > 0.7)
-        s.io_bound += min_score * 0.6;
+    if (avg_blocked_ms > 10.0)
+        s.io_bound += min_score * 0.5;
 
-    /* INTERACTIVE: high wakeup, short runs, low wait */
-    if (wake_rate >= 3 && avg_run_ms < 5.0 && avg_wait_ms < 20.0)
+    /* INTERACTIVE: high wakeup rate, short run times, short queue wait */
+    if (wake_rate >= 3 && avg_run_ms < 5.0 && avg_queue_ms < 20.0)
         s.interactive = min_score * 1.0;
-    if (wake_rate >= 5 && avg_run_ms < 2.0 && avg_wait_ms < 10.0)
+    if (wake_rate >= 5 && avg_run_ms < 2.0 && avg_queue_ms < 10.0)
         s.interactive += min_score * 0.75;
     if (wake_rate >= 10 && avg_run_ms < 1.0)
         s.interactive += min_score * 0.75;
     if (s.interactive > 0 && feat.nice < -5)
         s.interactive += 0.2;
+    /* short-lived fork pattern → interactive */
+    if (feat.parent_pid != 0 && avg_run_ms < 2.0 && wake_rate >= 3)
+        s.interactive += 0.3;
 
     min_score = cfg_.get_double("cpu.cpu_bound_min_score", 0.4);
-    if (wake_rate <= 2 && avg_run_ms > 10.0 && io_ratio < 0.3)
+    if (wake_rate <= 2 && avg_run_ms > 10.0 && io_ratio < 0.3 && avg_blocked_ms < avg_run_ms)
         s.cpu_bound = min_score * 1.0;
     if (wake_rate <= 1 && avg_run_ms > 50.0 && feat.migration_rate <= 2)
         s.cpu_bound += min_score * 0.75;
@@ -199,9 +213,9 @@ void CPUSchedSkill::apply_classification()
             top << "pid=" << kv.first << " class=" << (int)kv.second.cls;
             if (fit != features_.end()) {
                 top << " avg_run_ms=" << (fit->second.avg_run_ns / 1000000.0)
+                    << " avg_blocked_ms=" << (fit->second.avg_blocked_ns / 1000000.0)
+                    << " avg_queue_ms=" << (fit->second.avg_queue_ns / 1000000.0)
                     << " wakeup_rate=" << fit->second.wakeup_rate
-                    << " io_ratio=" << ((fit->second.io_wait_count + fit->second.d_state_count) /
-                        (double)(fit->second.switch_rate ?: 1))
                     << " nice=" << fit->second.nice;
             }
             top << "\n";

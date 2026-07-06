@@ -50,6 +50,11 @@ struct arca_stats_val {
     unsigned int d_state_count;
     unsigned int preempt_count;
     int nice;
+    unsigned long long runtime_ns;
+    unsigned long long blocked_ns;
+    unsigned long long wait_ns;
+    unsigned int parent_pid;
+    unsigned int fork_count;
     char comm[ARCA_TASK_COMM_LEN];
 };
 

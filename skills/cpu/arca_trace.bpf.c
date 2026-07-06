@@ -46,6 +46,48 @@ struct sched_wakeup_args {
     int target_cpu;
 };
 
+struct sched_stat_blocked_args {
+    unsigned short common_type;
+    unsigned char common_flags;
+    unsigned char common_preempt_count;
+    int common_pid;
+    char comm[16];
+    pid_t pid;
+    unsigned long long delay;
+};
+
+struct sched_stat_runtime_args {
+    unsigned short common_type;
+    unsigned char common_flags;
+    unsigned char common_preempt_count;
+    int common_pid;
+    char comm[16];
+    pid_t pid;
+    unsigned long long runtime;
+    unsigned long long vruntime;
+};
+
+struct sched_stat_wait_args {
+    unsigned short common_type;
+    unsigned char common_flags;
+    unsigned char common_preempt_count;
+    int common_pid;
+    char comm[16];
+    pid_t pid;
+    unsigned long long delay;
+};
+
+struct sched_process_fork_args {
+    unsigned short common_type;
+    unsigned char common_flags;
+    unsigned char common_preempt_count;
+    int common_pid;
+    char parent_comm[16];
+    pid_t parent_pid;
+    char child_comm[16];
+    pid_t child_pid;
+};
+
 static void ensure_stats(u32 pid, u64 tgid)
 {
     struct arca_stats_key key = { .pid = pid, .tgid = tgid };
@@ -131,6 +173,71 @@ int handle_sched_wakeup(struct sched_wakeup_args *ctx)
         if (val->comm[0] == 0)
             bpf_probe_read_kernel_str(val->comm, sizeof(val->comm), ctx->comm);
     }
+
+    return 0;
+}
+
+SEC("tp/sched/sched_stat_blocked")
+int handle_sched_stat_blocked(struct sched_stat_blocked_args *ctx)
+{
+    u32 pid = ctx->pid;
+    if (!pid) return 0;
+
+    struct arca_stats_key key = { .pid = pid };
+    struct arca_stats_val *val = bpf_map_lookup_elem(&task_stats, &key);
+    if (val && ctx->delay < 60000000000ULL)
+        val->blocked_ns += ctx->delay;
+
+    return 0;
+}
+
+SEC("tp/sched/sched_stat_runtime")
+int handle_sched_stat_runtime(struct sched_stat_runtime_args *ctx)
+{
+    u32 pid = ctx->pid;
+    if (!pid) return 0;
+
+    struct arca_stats_key key = { .pid = pid };
+    struct arca_stats_val *val = bpf_map_lookup_elem(&task_stats, &key);
+    if (val && ctx->runtime < 60000000000ULL)
+        val->runtime_ns += ctx->runtime;
+
+    return 0;
+}
+
+SEC("tp/sched/sched_stat_wait")
+int handle_sched_stat_wait(struct sched_stat_wait_args *ctx)
+{
+    u32 pid = ctx->pid;
+    if (!pid) return 0;
+
+    struct arca_stats_key key = { .pid = pid };
+    struct arca_stats_val *val = bpf_map_lookup_elem(&task_stats, &key);
+    if (val && ctx->delay < 60000000000ULL)
+        val->wait_ns += ctx->delay;
+
+    return 0;
+}
+
+SEC("tp/sched/sched_process_fork")
+int handle_sched_process_fork(struct sched_process_fork_args *ctx)
+{
+    u32 parent_pid = ctx->parent_pid;
+    u32 child_pid  = ctx->child_pid;
+    if (!parent_pid || !child_pid) return 0;
+
+    ensure_stats(child_pid, 0);
+    struct arca_stats_key key = { .pid = child_pid };
+    struct arca_stats_val *val = bpf_map_lookup_elem(&task_stats, &key);
+    if (val && val->parent_pid == 0) {
+        val->parent_pid = parent_pid;
+        if (val->comm[0] == 0)
+            bpf_probe_read_kernel_str(val->comm, sizeof(val->comm), ctx->child_comm);
+    }
+
+    struct arca_stats_key pkey = { .pid = parent_pid };
+    struct arca_stats_val *pval = bpf_map_lookup_elem(&task_stats, &pkey);
+    if (pval) __sync_fetch_and_add(&pval->fork_count, 1);
 
     return 0;
 }

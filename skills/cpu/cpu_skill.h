@@ -22,12 +22,15 @@ namespace arca {
 struct task_features {
     uint64_t avg_run_ns;
     uint64_t avg_wait_ns;
+    uint64_t avg_blocked_ns;
+    uint64_t avg_queue_ns;
     uint32_t wakeup_rate;
     uint32_t switch_rate;
     uint32_t migration_rate;
     uint32_t is_kthread;
     uint32_t io_wait_count;
     uint32_t d_state_count;
+    uint32_t parent_pid;
     int nice;
     char comm[16];
 };
@@ -40,6 +43,8 @@ struct task_snapshot {
     uint32_t prev_migration;
     uint32_t prev_io_wait;
     uint32_t prev_d_state;
+    uint64_t prev_blocked_ns;
+    uint64_t prev_queue_ns;
     enum arca_task_class cls;
     double confidence;
 };
