@@ -6,6 +6,7 @@
 #include <vector>
 #include "skill.h"
 #include "config.h"
+#include "shared_store.h"
 
 namespace arca {
 
@@ -19,7 +20,8 @@ struct resource_stats {
 
 class ResourceControlSkill : public Skill {
 public:
-    ResourceControlSkill(const Config &cfg) : Skill("ResourceCtrl", SkillType::RESOURCE_CONTROL), cfg_(cfg) {}
+    ResourceControlSkill(const Config &cfg, SharedStore *store = nullptr)
+        : Skill("ResourceCtrl", SkillType::RESOURCE_CONTROL), cfg_(cfg), store_(store) {}
 
     int init() override;
     int start() override;
@@ -34,6 +36,7 @@ private:
     resource_stats stats_ = {};
     std::string cgroup_path_;
     Config cfg_;
+    SharedStore *store_;
 };
 
 } // namespace arca

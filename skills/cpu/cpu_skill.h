@@ -13,6 +13,7 @@ void  arca_scx_destroy(void *state);
 }
 #include "skill.h"
 #include "config.h"
+#include "shared_store.h"
 #include "arca.h"
 
 namespace arca {
@@ -45,11 +46,11 @@ struct classify_score {
 
 class CPUSchedSkill : public Skill {
 public:
-    CPUSchedSkill(const Config &cfg)
+    CPUSchedSkill(const Config &cfg, SharedStore *store = nullptr)
         : Skill("CPUSched", SkillType::CPU_SCHED),
         trace_obj_(nullptr), rb_(nullptr), scx_state_(nullptr),
         class_map_fd_(-1), stats_map_fd_(-1),
-        event_count_(0), last_snapshot_ts_(0) {
+        store_(store), event_count_(0), last_snapshot_ts_(0) {
         cfg_ = cfg;
     }
 
@@ -69,6 +70,7 @@ private:
     int class_map_fd_;
     int stats_map_fd_;
     Config cfg_;
+    SharedStore *store_;
 
     uint64_t event_count_;
     time_t last_snapshot_ts_;

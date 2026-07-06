@@ -76,6 +76,14 @@ int ResourceControlSkill::collect()
 
     stats_.oom_count = read_val(cgroup_path_ + "/memory.events");
 
+    /* write to shared store */
+    if (store_) {
+        store_->put_int("system.mem_usage_mb", (int)stats_.mem_usage_mb);
+        store_->put_int("system.cpu_usage_pct", (int)stats_.cpu_usage_pct);
+        store_->put_int("system.oom_count", (int)stats_.oom_count);
+        store_->put("system.status", status());
+    }
+
     return 0;
 }
 

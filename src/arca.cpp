@@ -7,10 +7,12 @@
 #include "config.h"
 #include "skill.h"
 #include "skill_manager.h"
+#include "shared_store.h"
 #include "cpu_skill.h"
 #include "network_skill.h"
 #include "resource_skill.h"
 #include "security_skill.h"
+#include "llm_skill.h"
 #include "dashboard.h"
 
 using namespace arca;
@@ -28,18 +30,22 @@ int main(int argc, char **argv)
     Config cfg(cfg_path);
 
     SkillManager mgr;
+    SharedStore *store = mgr.store();
 
-    auto cpu_skill = std::make_shared<CPUSchedSkill>(cfg);
+    auto cpu_skill = std::make_shared<CPUSchedSkill>(cfg, store);
     mgr.register_skill(cpu_skill);
 
     auto net_skill = std::make_shared<NetworkPolicySkill>();
     mgr.register_skill(net_skill);
 
-    auto res_skill = std::make_shared<ResourceControlSkill>(cfg);
+    auto res_skill = std::make_shared<ResourceControlSkill>(cfg, store);
     mgr.register_skill(res_skill);
 
     auto sec_skill = std::make_shared<SecurityPolicySkill>();
     mgr.register_skill(sec_skill);
+
+    auto llm_skill = std::make_shared<LLMDecisionSkill>(store);
+    mgr.register_skill(llm_skill);
 
     if (mgr.init_all() != 0) {
         fprintf(stderr, "Init failed\n");

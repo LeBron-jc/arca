@@ -8,11 +8,15 @@
 #include <ctime>
 
 #include "skill.h"
+#include "shared_store.h"
 
 namespace arca {
 
 class SkillManager {
 public:
+    SkillManager() : store_(new SharedStore()) {}
+
+    SharedStore *store() { return store_.get(); }
     void register_skill(std::shared_ptr<Skill> skill) {
         skills_.push_back(skill);
         printf("[Manager] Registered: %s\n", skill->name().c_str());
@@ -76,6 +80,7 @@ public:
 
 private:
     std::vector<std::shared_ptr<Skill>> skills_;
+    std::shared_ptr<SharedStore> store_;
 };
 
 } // namespace arca

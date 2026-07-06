@@ -16,7 +16,7 @@ LIBBPF_A    ?= $(BUILD_DIR)/obj/libbpf/libbpf.a
 LIBBPF_INC  := $(BUILD_DIR)/include
 CLANG_INC   := $(LD_LIBS)/clang/17/include
 
-INC := -I./include -I./skills/cpu -I./skills/network -I./skills/resource -I./skills/security
+INC := -I./include -I./skills/cpu -I./skills/network -I./skills/resource -I./skills/security -I./skills/llm
 
 CXXFLAGS := -std=c++11 -g -O2 -Wall $(INC) \
 	-I$(LOCAL_PFX)/usr/include \
@@ -98,12 +98,16 @@ skills/security/security_skill.o: skills/security/security_skill.cpp skills/secu
 src/arca.o: src/arca.cpp include/*.h skills/*/**.h
 	LD_LIBRARY_PATH=$(LD_LIBS) $(CLANGXX) $(CXXFLAGS) -c $< -o $@
 
+skills/llm/llm_skill.o: skills/llm/llm_skill.cpp skills/llm/llm_skill.h include/skill.h include/shared_store.h
+	LD_LIBRARY_PATH=$(LD_LIBS) $(CLANGXX) $(CXXFLAGS) -c $< -o $@
+
 # ---- link ----
 SRCS := src/arca.o
 SRCS += skills/cpu/cpu_skill.o skills/cpu/arca_scx_ops.o
 SRCS += skills/network/network_skill.o
 SRCS += skills/resource/resource_skill.o
 SRCS += skills/security/security_skill.o
+SRCS += skills/llm/llm_skill.o
 
 bin/arca: $(SRCS) $(LIBBPF_A) | bin
 	gcc -o $@ $(SRCS) $(LIBBPF_A) $(LDFLAGS) -lelf -lz -lstdc++

@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <sstream>
 #include <unistd.h>
 #include "cpu_skill.h"
 
@@ -189,6 +190,34 @@ void CPUSchedSkill::apply_classification()
     memset(classified_, 0, sizeof(classified_));
     for (auto &kv : snapshots_)
         classified_[kv.second.cls]++;
+
+    /* write to shared store for other skills (LLM) */
+    if (store_) {
+        store_->put_int("cpu.events", event_count_);
+        store_->put_int("cpu.tasks", (int)snapshots_.size());
+        store_->put_int("cpu.interactive", classified_[1]);
+        store_->put_int("cpu.cpu_bound", classified_[2]);
+        store_->put_int("cpu.batch", classified_[3]);
+
+        /* top 10 active tasks */
+        std::ostringstream top;
+        int n = 0;
+        for (auto &kv : snapshots_) {
+            if (++n > 10) break;
+            auto fit = features_.find(kv.first);
+            top << "pid=" << kv.first
+                << " class=" << (int)kv.second.cls
+                << " confidence=" << kv.second.confidence;
+            if (fit != features_.end()) {
+                top << " avg_run_ms=" << (fit->second.avg_run_ns / 1000000.0)
+                    << " wakeup_rate=" << fit->second.wakeup_rate
+                    << " migration=" << fit->second.migration_rate
+                    << " is_kthread=" << fit->second.is_kthread;
+            }
+            top << "\n";
+        }
+        store_->put("cpu.top_tasks", top.str());
+    }
 
     /* prune stale entries */
     for (auto it = features_.begin(); it != features_.end(); ) {
