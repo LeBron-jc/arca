@@ -108,115 +108,30 @@ void CPUSchedSkill::compute_features()
     last_snapshot_ts_ = now;
 }
 
-classify_score CPUSchedSkill::score_task(const task_features &feat)
+int CPUSchedSkill::policy()
 {
-    classify_score s = {};
+    compute_features();
 
-    if (feat.wakeup_rate == 0 && feat.switch_rate == 0)
-        return s;
-
-    double wake_rate = (double)feat.wakeup_rate;
-    double switch_rate = (double)feat.switch_rate;
-    double avg_run_ms = feat.avg_run_ns / 1000000.0;
-    double avg_wait_ms = feat.avg_wait_ns / 1000000.0;
-    double avg_blocked_ms = feat.avg_blocked_ns / 1000000.0;
-    double avg_queue_ms = feat.avg_queue_ns / 1000000.0;
-    double io_ratio = (feat.io_wait_count + feat.d_state_count) /
-                      (double)(feat.switch_rate ? feat.switch_rate : 1);
-
-    double min_score = cfg_.get_double("cpu.interactive_min_score", 0.4);
-
-    /* IO_BOUND: precise blocked time > 50% of existence means I/O bottleneck */
-    if (avg_blocked_ms > 5.0 && avg_blocked_ms > avg_run_ms)
-        s.io_bound = min_score * 1.5;
-    if (io_ratio > 0.5 && avg_run_ms < 5.0)
-        s.io_bound = min_score * 1.2;
-    if (io_ratio > 0.3 && feat.d_state_count > 0)
-        s.io_bound += min_score * 0.6;
-    if (avg_blocked_ms > 10.0)
-        s.io_bound += min_score * 0.5;
-
-    /* INTERACTIVE: high wakeup rate, short run times, short queue wait */
-    if (wake_rate >= 3 && avg_run_ms < 5.0 && avg_queue_ms < 20.0)
-        s.interactive = min_score * 1.0;
-    if (wake_rate >= 5 && avg_run_ms < 2.0 && avg_queue_ms < 10.0)
-        s.interactive += min_score * 0.75;
-    if (wake_rate >= 10 && avg_run_ms < 1.0)
-        s.interactive += min_score * 0.75;
-    if (s.interactive > 0 && feat.nice < -5)
-        s.interactive += 0.2;
-    /* short-lived fork pattern → interactive */
-    if (feat.parent_pid != 0 && avg_run_ms < 2.0 && wake_rate >= 3)
-        s.interactive += 0.3;
-
-    min_score = cfg_.get_double("cpu.cpu_bound_min_score", 0.4);
-    if (wake_rate <= 2 && avg_run_ms > 10.0 && io_ratio < 0.3 && avg_blocked_ms < avg_run_ms)
-        s.cpu_bound = min_score * 1.0;
-    if (wake_rate <= 1 && avg_run_ms > 50.0 && feat.migration_rate <= 2)
-        s.cpu_bound += min_score * 0.75;
-    if (switch_rate >= 10 && wake_rate <= 1 && io_ratio < 0.2)
-        s.cpu_bound += min_score * 0.75;
-
-    min_score = cfg_.get_double("cpu.batch_min_score", 0.4);
-    if (avg_run_ms > 5.0 && wake_rate <= 3 && io_ratio < 0.4)
-        s.batch = min_score * 0.75;
-    if (avg_run_ms > 20.0 && wake_rate <= 5)
-        s.batch += min_score * 0.75;
-    if (switch_rate >= 15 && wake_rate <= 3)
-        s.batch += min_score * 0.5;
-    if (feat.migration_rate <= 3 && avg_run_ms > 50.0)
-        s.batch += min_score * 0.5;
-
-    return s;
-}
-
-void CPUSchedSkill::apply_classification()
-{
-    for (auto &kv : snapshots_) {
-        uint32_t pid = kv.first;
-        auto &snap = kv.second;
-        auto fit = features_.find(pid);
-        if (fit == features_.end()) continue;
-
-        classify_score sc = score_task(fit->second);
-        enum arca_task_class new_cls = ARCA_CLASS_UNKNOWN;
-        double best = 0.0;
-
-        if (sc.interactive > best) { best = sc.interactive; new_cls = ARCA_CLASS_INTERACTIVE; }
-        if (sc.cpu_bound > best)   { best = sc.cpu_bound;   new_cls = ARCA_CLASS_CPU_BOUND; }
-        if (sc.batch > best)       { best = sc.batch;       new_cls = ARCA_CLASS_BATCH; }
-        if (sc.io_bound > best)    { best = sc.io_bound;    new_cls = ARCA_CLASS_IO_BOUND; }
-
-        if (new_cls != ARCA_CLASS_UNKNOWN && new_cls != snap.cls && best >= 0.4) {
-            snap.cls = new_cls;
-            snap.confidence = best;
-            bpf_map_update_elem(class_map_fd_, &pid, &new_cls, BPF_ANY);
-        }
-    }
-
-    memset(classified_, 0, sizeof(classified_));
-    for (auto &kv : snapshots_) classified_[kv.second.cls]++;
-
+    /* write collected features to SharedStore for LLM consumption */
     if (store_) {
-        store_->put_int("cpu.events", (int)event_count_);
         store_->put_int("cpu.tasks", (int)snapshots_.size());
-        store_->put_int("cpu.interactive", classified_[1]);
-        store_->put_int("cpu.cpu_bound", classified_[2]);
-        store_->put_int("cpu.batch", classified_[3]);
-        store_->put_int("cpu.io_bound", classified_[4]);
 
         std::ostringstream top;
         int n = 0;
         for (auto &kv : snapshots_) {
             if (++n > 10) break;
             auto fit = features_.find(kv.first);
-            top << "pid=" << kv.first << " class=" << (int)kv.second.cls;
+            top << "pid=" << kv.first;
             if (fit != features_.end()) {
                 top << " avg_run_ms=" << (fit->second.avg_run_ns / 1000000.0)
                     << " avg_blocked_ms=" << (fit->second.avg_blocked_ns / 1000000.0)
                     << " avg_queue_ms=" << (fit->second.avg_queue_ns / 1000000.0)
                     << " wakeup_rate=" << fit->second.wakeup_rate
-                    << " nice=" << fit->second.nice;
+                    << " io_wait=" << fit->second.io_wait_count
+                    << " d_state=" << fit->second.d_state_count
+                    << " nice=" << fit->second.nice
+                    << " parent=" << fit->second.parent_pid
+                    << " comm=" << fit->second.comm;
             }
             top << "\n";
         }
@@ -230,12 +145,7 @@ void CPUSchedSkill::apply_classification()
             it = features_.erase(it);
         else ++it;
     }
-}
 
-int CPUSchedSkill::policy()
-{
-    compute_features();
-    apply_classification();
     return 0;
 }
 
@@ -244,12 +154,7 @@ int CPUSchedSkill::act() { return 0; }
 std::vector<SkillMetrics> CPUSchedSkill::metrics()
 {
     return {
-        {"events",      (double)event_count_, "cnt",  "Total events"},
-        {"tasks",       (double)snapshots_.size(), "cnt", "Tracked tasks"},
-        {"interactive", (double)classified_[1], "cnt", "INTERACTIVE"},
-        {"cpu_bound",   (double)classified_[2], "cnt", "CPU_BOUND"},
-        {"batch",       (double)classified_[3], "cnt", "BATCH"},
-        {"io_bound",    (double)classified_[4], "cnt", "IO_BOUND"},
+        {"tasks", (double)snapshots_.size(), "cnt", "Tracked tasks"},
     };
 }
 

@@ -3,11 +3,16 @@
 
 #define ARCA_TASK_COMM_LEN 16
 
-/* sched_switch prev_state bits */
 #define TASK_RUNNING            0
 #define TASK_INTERRUPTIBLE      1
 #define TASK_UNINTERRUPTIBLE    2
 
+#define PRIORITY_HIGH   80
+#define PRIORITY_NORMAL 0
+#define PRIORITY_LOW    -50
+#define PRIORITY_IDLE   -100
+
+/* kept for backward compat — actual scheduling uses per-PID int priorities */
 enum arca_task_class {
     ARCA_CLASS_UNKNOWN     = 0,
     ARCA_CLASS_INTERACTIVE = 1,

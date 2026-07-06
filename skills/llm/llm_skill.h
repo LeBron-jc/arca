@@ -13,8 +13,7 @@ namespace arca {
 
 struct llm_decision {
     int pid;
-    int new_class;      /* arca_task_class enum value */
-    int new_slice_us;
+    int priority;
     std::string reason;
 };
 

@@ -18,7 +18,7 @@ void *arca_scx_open_load_attach(const char *pin_path)
 	if (pin_path) {
 		int fd = bpf_obj_get(pin_path);
 		if (fd >= 0) {
-			bpf_map__reuse_fd(st->skel->maps.task_class_map, fd);
+            bpf_map__reuse_fd(st->skel->maps.task_class_map, fd);
 			close(fd);
 		}
 	}

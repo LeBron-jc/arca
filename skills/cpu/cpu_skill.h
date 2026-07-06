@@ -45,8 +45,6 @@ struct task_snapshot {
     uint32_t prev_d_state;
     uint64_t prev_blocked_ns;
     uint64_t prev_queue_ns;
-    enum arca_task_class cls;
-    double confidence;
 };
 
 struct classify_score {
@@ -84,11 +82,8 @@ private:
     time_t last_snapshot_ts_;
     std::unordered_map<uint32_t, task_features> features_;
     std::unordered_map<uint32_t, task_snapshot> snapshots_;
-    int classified_[5] = {};
 
     void compute_features();
-    classify_score score_task(const task_features &feat);
-    void apply_classification();
 };
 
 } // namespace arca

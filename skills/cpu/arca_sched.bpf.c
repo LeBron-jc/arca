@@ -9,7 +9,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 8192);
     __type(key, u32);
-    __type(value, enum arca_task_class);
+    __type(value, int);
 } task_class_map SEC(".maps");
 
 struct {
@@ -26,33 +26,24 @@ static void stat_inc(u32 idx) {
 
 static u64 vtime_now;
 
-#define INTERACTIVE_SLICE  ((SCX_SLICE_DFL) / 5)
-#define NORMAL_SLICE       (SCX_SLICE_DFL)
-#define CPU_BOUND_SLICE    ((SCX_SLICE_DFL) * 2)
-#define BATCH_SLICE        ((SCX_SLICE_DFL) * 4)
+#define DFL_SLICE (SCX_SLICE_DFL)  /* 5ms */
 
-static u64 get_slice(enum arca_task_class cls) {
-    switch (cls) {
-    case ARCA_CLASS_INTERACTIVE: return INTERACTIVE_SLICE;
-    case ARCA_CLASS_CPU_BOUND:   return CPU_BOUND_SLICE;
-    case ARCA_CLASS_BATCH:       return BATCH_SLICE;
-    default:                     return NORMAL_SLICE;
-    }
-}
-
+/*
+ * select_cpu: high-priority tasks bypass the queue
+ */
 s32 BPF_STRUCT_OPS(arca_select_cpu, struct task_struct *p,
                    s32 prev_cpu, u64 wake_flags)
 {
     bool is_idle = false;
     s32 cpu;
     u32 pid = p->pid;
-    enum arca_task_class *cls = bpf_map_lookup_elem(&task_class_map, &pid);
+    int *prio = bpf_map_lookup_elem(&task_class_map, &pid);
 
-    if (cls && *cls == ARCA_CLASS_INTERACTIVE) {
+    if (prio && *prio >= PRIORITY_HIGH) {
         s32 idle_cpu = scx_bpf_pick_idle_cpu(p->cpus_ptr, 0);
         cpu = (idle_cpu >= 0) ? idle_cpu :
               scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle);
-        scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, INTERACTIVE_SLICE, 0);
+        scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, DFL_SLICE / 5, 0);
         scx_bpf_kick_cpu(cpu, SCX_KICK_PREEMPT);
         stat_inc(0);
         return cpu;
@@ -60,30 +51,42 @@ s32 BPF_STRUCT_OPS(arca_select_cpu, struct task_struct *p,
 
     cpu = scx_bpf_select_cpu_dfl(p, prev_cpu, wake_flags, &is_idle);
     if (is_idle)
-        scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0);
+        scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, DFL_SLICE, 0);
     return cpu;
 }
 
+/*
+ * enqueue: adjust vtime by priority — higher = earlier in queue
+ */
 void BPF_STRUCT_OPS(arca_enqueue, struct task_struct *p, u64 enq_flags)
 {
     u32 pid = p->pid;
-    enum arca_task_class *cls = bpf_map_lookup_elem(&task_class_map, &pid);
-    enum arca_task_class c = cls ? *cls : ARCA_CLASS_UNKNOWN;
-    u64 slice = get_slice(c);
+    int *prio = bpf_map_lookup_elem(&task_class_map, &pid);
+    int priority = prio ? *prio : 0;
 
     if (p->scx.dsq_vtime == 0)
         p->scx.dsq_vtime = vtime_now;
 
     u64 vtime = p->scx.dsq_vtime;
-    if (time_before(vtime, vtime_now - slice))
-        vtime = vtime_now - slice;
+    u64 slice = DFL_SLICE;
+
+    /* priority → vtime offset: +100 = 10x slice boost (runs 10x more often) */
+    if (priority > 0) {
+        vtime -= (u64)priority * slice / 10;
+        slice = DFL_SLICE / 2;  /* high priority = shorter slice = better responsiveness */
+        stat_inc(0);
+    } else if (priority < PRIORITY_LOW) {
+        vtime += (u64)(-priority) * slice / 10;
+        slice = DFL_SLICE * 4;  /* low priority = longer slice = fewer context switches */
+        stat_inc(1);
+    } else {
+        stat_inc(2);
+    }
+
+    if (time_before(vtime, vtime_now - slice * 100))
+        vtime = vtime_now - slice * 100;
 
     scx_bpf_dsq_insert_vtime(p, SHARED_DSQ, slice, vtime, enq_flags);
-
-    if (c == ARCA_CLASS_INTERACTIVE)      stat_inc(0);
-    else if (c == ARCA_CLASS_CPU_BOUND)   stat_inc(1);
-    else if (c == ARCA_CLASS_BATCH)       stat_inc(2);
-    else if (c == ARCA_CLASS_IO_BOUND)    stat_inc(3);
 }
 
 void BPF_STRUCT_OPS(arca_dispatch, s32 cpu, struct task_struct *prev)
@@ -99,16 +102,13 @@ void BPF_STRUCT_OPS(arca_running, struct task_struct *p)
 
 void BPF_STRUCT_OPS(arca_stopping, struct task_struct *p, bool runnable)
 {
-    u64 executed = NORMAL_SLICE - p->scx.slice;
-    p->scx.dsq_vtime += executed * 100 / p->scx.weight;
+    u64 used = DFL_SLICE - p->scx.slice;
+    p->scx.dsq_vtime += used * 100 / p->scx.weight;
 }
 
 s32 BPF_STRUCT_OPS_SLEEPABLE(arca_init)
 {
     scx_bpf_create_dsq(SHARED_DSQ, -1);
-    scx_bpf_create_dsq(HIGH_DSQ_ID, -1);
-    scx_bpf_create_dsq(NORMAL_DSQ_ID, -1);
-    scx_bpf_create_dsq(LOW_DSQ_ID, -1);
     return 0;
 }
 

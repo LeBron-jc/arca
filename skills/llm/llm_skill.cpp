@@ -26,48 +26,33 @@ static std::string json_escape(const std::string &s)
     return r;
 }
 
+static std::string rtrim(const std::string &s) {
+    auto end = s.find_last_not_of(" \t\n\r");
+    return end == std::string::npos ? "" : s.substr(0, end + 1);
+}
+
 int LLMDecisionSkill::init()
 {
     std::string api_key = cfg_.get_str("llm.api_key", "");
     if (api_key.empty()) api_key = getenv("DEEPSEEK_API_KEY") ?: "";
-    if (api_key.empty()) {
-        set_status("disabled: set llm.api_key in arca.conf or DEEPSEEK_API_KEY env");
-        return 0;
-    }
+    if (api_key.empty()) { set_status("no api key"); return 0; }
     return 0;
 }
 
 int LLMDecisionSkill::start()
 {
     running_ = true;
-    /* open the pinned map that CPUSchedSkill has already created */
     class_map_fd_ = bpf_obj_get("/sys/fs/bpf/task_class_map");
-    if (class_map_fd_ < 0)
-        fprintf(stderr, "[LLM] Warning: cannot open /sys/fs/bpf/task_class_map\n");
     return 0;
 }
 
-int LLMDecisionSkill::stop()
-{
-    running_ = false;
-    return 0;
-}
-
-int LLMDecisionSkill::collect()
-{
-    return 0;
-}
-
-static std::string rtrim(const std::string &s) {
-    auto end = s.find_last_not_of(" \t\n\r");
-    return end == std::string::npos ? "" : s.substr(0, end + 1);
-}
+int LLMDecisionSkill::stop()    { running_ = false; return 0; }
+int LLMDecisionSkill::collect() { return 0; }
 
 std::string LLMDecisionSkill::build_prompt()
 {
     std::ostringstream ss;
-
-    ss << R"(You are an OS scheduling expert. Analyze the following system state and workload data to optimize CPU scheduling.
+    ss << R"(You are a Linux kernel scheduling expert. Analyze system state and assign per-task CPU priorities.
 
 ## System State
 )";
@@ -75,26 +60,25 @@ std::string LLMDecisionSkill::build_prompt()
 
     ss << R"(
 
-## Instructions
-1. Review each task's workload pattern.
-2. Decide its scheduling class:
-   - 1 = INTERACTIVE (high wakeup rate, short runtime, latency-sensitive)
-   - 2 = CPU_BOUND (low wakeup rate, long continuous runtime)
-   - 3 = BATCH (moderate wakeup, bulk processing, not latency-sensitive)
-3. Suggest optimal time slice in microseconds (1000-50000).
-4. Provide a one-sentence reason.
+## Priority Scale
+- +80 to +100: Latency-critical (interactive shell, database, real-time). Must preempt.
+- +20 to +70:  Interactive (GUI, network server). Prefer idle CPU.
+- -20 to +20:  Normal (unclassified, mixed workload).
+- -50 to -20:  Batch (compilation, backup, log processing). Run in background.
+- -100 to -50: Idle/I/O blocked (waiting on disk/network). Lowest priority.
 
-## Output Format
-Respond ONLY with lines in this exact format:
-CLASSIFY: pid=<pid> class=<1|2|3> slice=<us> reason=<one sentence>
+## Rules
+1. Network-heavy + low wakeup → probably a server → +60
+2. High io_ratio + low run_time → I/O blocked → -30
+3. High wakeup_rate + short run_time → interactive → +80
+4. Long run_time + low wakeup → CPU-bound → +10
+5. Newly forked + parent is high priority → inherit +40
+6. kthread → 0 (let kernel manage)
+
+## Output Format (respond ONLY with these lines)
+PRIORITY: pid=<pid> priority=<int> reason=<one sentence>
 STATUS: <normal|alert|warning>
-
-## Example
-CLASSIFY: pid=1234 class=1 slice=1000 reason=High wakeup rate indicates interactive shell
-CLASSIFY: pid=5678 class=2 slice=10000 reason=Long continuous runs with low wakeup count
-STATUS: normal
 )";
-
     return ss.str();
 }
 
@@ -104,10 +88,9 @@ std::string LLMDecisionSkill::call_deepseek_api(const std::string &prompt)
     if (api_key.empty()) api_key = getenv("DEEPSEEK_API_KEY") ?: "";
     if (api_key.empty()) return "";
 
-    /* write request body to temp file to avoid shell command length limit */
     std::string model = cfg_.get_str("llm.model", "deepseek-chat");
     std::string json_body = "{\"model\":\"" + model + "\",\"messages\":[";
-    json_body += R"({"role":"system","content":"You are an OS scheduling expert. Respond concisely."},)";
+    json_body += R"({"role":"system","content":"You are an OS scheduling expert. Output only PRIORITY lines."},)";
     json_body += R"({"role":"user","content":")";
     json_body += json_escape(prompt);
     json_body += R"("}],"temperature":0.3,"max_tokens":2048})";
@@ -131,8 +114,7 @@ std::string LLMDecisionSkill::call_deepseek_api(const std::string &prompt)
 
     std::string result;
     char buf[4096];
-    while (fgets(buf, sizeof(buf), fp))
-        result += buf;
+    while (fgets(buf, sizeof(buf), fp)) result += buf;
     pclose(fp);
     unlink(tmpfile);
 
@@ -144,17 +126,17 @@ std::string LLMDecisionSkill::call_deepseek_api(const std::string &prompt)
 std::vector<llm_decision> LLMDecisionSkill::parse_response(const std::string &response)
 {
     std::vector<llm_decision> decisions;
-
     if (response.empty()) return decisions;
 
-    /* extract content from JSON response: check "content":"..." and "reasoning_content":"..." */
     auto pos = response.find("\"content\":\"");
     if (pos == std::string::npos) {
         pos = response.find("\"reasoning_content\":\"");
-        if (pos != std::string::npos) pos += 22; /* skip past "reasoning_content":" */
+        if (pos != std::string::npos) pos += 22;
     } else {
-        pos += 11; /* skip past "content":" */
+        pos += 11;
     }
+    if (pos == std::string::npos) return decisions;
+
     std::string content;
     while (pos < response.size()) {
         char c = response[pos];
@@ -164,56 +146,36 @@ std::vector<llm_decision> LLMDecisionSkill::parse_response(const std::string &re
             if (nxt == 'r') { content += '\r'; pos += 2; continue; }
             if (nxt == 't') { content += '\t'; pos += 2; continue; }
             if (nxt == '"') { content += '"';  pos += 2; continue; }
-            if (nxt == '\\') { content += '\\'; pos += 2; continue; }
-            content += nxt;
-            pos += 2;
+            if (nxt == '\\'){ content += '\\'; pos += 2; continue; }
+            content += nxt; pos += 2;
         } else if (c == '"') {
             break;
         } else {
-            content += c;
-            pos++;
+            content += c; pos++;
         }
     }
 
-    /* parse CLASSIFY lines from content */
     std::istringstream iss(content);
     std::string line;
     while (std::getline(iss, line)) {
         line = rtrim(line);
-        if (line.compare(0, 9, "CLASSIFY:") != 0) continue;
+        if (line.compare(0, 9, "PRIORITY:") != 0) continue;
 
         llm_decision d = {};
-        d.new_slice_us = -1;
-        d.new_class = -1;
 
-        /* parse pid=1234 class=1 slice=1000 reason=... */
         auto p1 = line.find("pid=");
-        auto p2 = line.find(" class=");
-        auto p3 = line.find(" slice=");
-        auto p4 = line.find(" reason=");
+        auto p2 = line.find(" priority=");
+        auto p3 = line.find(" reason=");
 
         if (p1 != std::string::npos && p2 != std::string::npos) {
             d.pid = atoi(line.c_str() + p1 + 4);
-
-            auto cls_str = line.substr(p2 + 7, 1);
-            d.new_class = atoi(cls_str.c_str());
-
-            if (p3 != std::string::npos) {
-                auto slice_str = line.substr(p3 + 7);
-                auto sp = slice_str.find(" ");
-                if (sp != std::string::npos) slice_str = slice_str.substr(0, sp);
-                d.new_slice_us = atoi(slice_str.c_str());
-            }
-
-            if (p4 != std::string::npos) {
-                d.reason = rtrim(line.substr(p4 + 8));
-            }
-
-            if (d.pid > 0 && d.new_class >= 1 && d.new_class <= 3)
+            d.priority = atoi(line.c_str() + p2 + 10);
+            if (p3 != std::string::npos)
+                d.reason = rtrim(line.substr(p3 + 8));
+            if (d.pid > 0 && d.priority >= -100 && d.priority <= 100)
                 decisions.push_back(d);
         }
     }
-
     return decisions;
 }
 
@@ -222,66 +184,48 @@ void LLMDecisionSkill::apply_decisions(const std::vector<llm_decision> &decision
     for (auto &d : decisions) {
         if (class_map_fd_ < 0) continue;
 
-        enum arca_task_class cls = (enum arca_task_class)d.new_class;
+        int old_prio = 0;
+        bpf_map_lookup_elem(class_map_fd_, &d.pid, &old_prio);
 
-        /* read current class from map */
-        enum arca_task_class old_cls = ARCA_CLASS_UNKNOWN;
-        bpf_map_lookup_elem(class_map_fd_, &d.pid, &old_cls);
-
-        if (old_cls != cls) {
-            bpf_map_update_elem(class_map_fd_, &d.pid, &cls, BPF_ANY);
-            printf("[LLM] pid=%d: override %d→%d slice=%dus reason=%s\n",
-                   d.pid, (int)old_cls, (int)cls,
-                   d.new_slice_us, d.reason.c_str());
+        if (old_prio != d.priority) {
+            bpf_map_update_elem(class_map_fd_, &d.pid, &d.priority, BPF_ANY);
+            printf("[LLM] pid=%d priority=%d (was %d) reason=%s\n",
+                   d.pid, d.priority, old_prio, d.reason.c_str());
         }
     }
 }
 
 int LLMDecisionSkill::policy()
 {
-    if (store_->size() < 2) return 0; /* wait for data */
+    if (!store_ || store_->size() < 2) return 0;
 
-    /* rate limit: max 1 call per 5 seconds */
-    time_t now = time(NULL);
     int interval = cfg_.get_int("llm.call_interval_sec", 10);
+    time_t now = time(NULL);
     if (now - last_call_time_ < interval) return 0;
 
     std::string prompt = build_prompt();
     std::string response = call_deepseek_api(prompt);
-
-    if (response.empty()) {
-        set_status("API call failed, using rule-based fallback");
-        return 0;
-    }
+    if (response.empty()) { set_status("api call failed"); return 0; }
 
     auto decisions = parse_response(response);
-    fprintf(stderr, "[LLM] API call #%d returned %zu chars, %zu decisions\n",
+    fprintf(stderr, "[LLM] #%d: %zu chars, %zu decisions\n",
             call_count_, response.size(), decisions.size());
-
-    if (decisions.empty()) {
-        set_status("LLM returned no decisions");
-        return 0;
-    }
 
     apply_decisions(decisions);
 
     char buf[64];
-    snprintf(buf, sizeof(buf), "called #%d, %zu decisions",
-             call_count_, decisions.size());
+    snprintf(buf, sizeof(buf), "#%d, %zu priorities", call_count_, decisions.size());
     set_status(buf);
     return 0;
 }
 
-int LLMDecisionSkill::act()
-{
-    return 0;
-}
+int LLMDecisionSkill::act() { return 0; }
 
 std::vector<SkillMetrics> LLMDecisionSkill::metrics()
 {
     return {
-        {"llm_calls",    (double)call_count_, "cnt",  "LLM API calls"},
-        {"last_call_sec", (double)(time(NULL)-last_call_time_), "s", "Seconds since last call"},
+        {"llm_calls", (double)call_count_, "cnt", "LLM API calls"},
+        {"last_call", (double)(time(NULL)-last_call_time_), "s", "Seconds since last call"},
     };
 }
 
