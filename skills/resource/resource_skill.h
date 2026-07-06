@@ -16,6 +16,8 @@ struct resource_stats {
     uint64_t io_read_kb;
     uint64_t io_write_kb;
     uint64_t oom_count;
+    uint64_t page_allocs;
+    uint64_t block_ios;
 };
 
 class ResourceControlSkill : public Skill {
@@ -31,6 +33,10 @@ public:
     int act() override;
 
     std::vector<SkillMetrics> metrics() override;
+
+private:
+    struct bpf_object *bpf_obj_ = nullptr;
+    int counters_fd_ = -1;
 
 private:
     resource_stats stats_ = {};

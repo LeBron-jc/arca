@@ -66,6 +66,15 @@ skills/security/security_skill.skel.h: skills/security/security_trace.bpf.o
 	$(BPFTOOL) gen object /tmp/sec_t3.o /tmp/sec_t2.o
 	$(BPFTOOL) gen skeleton /tmp/sec_t3.o name security_skill > $@
 
+skills/resource/resource_trace.bpf.o: skills/resource/resource_trace.bpf.c $(VMLINUX_H)
+	LD_LIBRARY_PATH=$(LD_LIBS) $(CLANG) $(BPF_BASE) -c $< -o $@
+
+skills/resource/resource_skill.skel.h: skills/resource/resource_trace.bpf.o
+	$(BPFTOOL) gen object /tmp/res_t1.o $<
+	$(BPFTOOL) gen object /tmp/res_t2.o /tmp/res_t1.o
+	$(BPFTOOL) gen object /tmp/res_t3.o /tmp/res_t2.o
+	$(BPFTOOL) gen skeleton /tmp/res_t3.o name resource_skill > $@
+
 skills/cpu/arca_sched.bpf.o: skills/cpu/arca_sched.bpf.c include/arca.h include/arca_sched.h $(VMLINUX_H)
 	LD_LIBRARY_PATH=$(LD_LIBS) $(CLANG) $(BPF_BASE) \
 		-I$(SCX_INC) -I$(SCX_BPF_INC) -I$(TOOLS_UAPI) \
@@ -89,7 +98,7 @@ skills/cpu/cpu_skill.o: skills/cpu/cpu_skill.cpp skills/cpu/cpu_skill.h include/
 skills/network/network_skill.o: skills/network/network_skill.cpp skills/network/network_skill.h include/skill.h skills/network/network_skill.skel.h
 	LD_LIBRARY_PATH=$(LD_LIBS) $(CLANGXX) $(CXXFLAGS) -c $< -o $@
 
-skills/resource/resource_skill.o: skills/resource/resource_skill.cpp skills/resource/resource_skill.h include/skill.h include/config.h
+skills/resource/resource_skill.o: skills/resource/resource_skill.cpp skills/resource/resource_skill.h include/skill.h include/config.h skills/resource/resource_skill.skel.h
 	LD_LIBRARY_PATH=$(LD_LIBS) $(CLANGXX) $(CXXFLAGS) -c $< -o $@
 
 skills/security/security_skill.o: skills/security/security_skill.cpp skills/security/security_skill.h include/skill.h skills/security/security_skill.skel.h

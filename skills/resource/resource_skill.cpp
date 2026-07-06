@@ -2,7 +2,13 @@
 #include <cstring>
 #include <fstream>
 #include <unistd.h>
+
+extern "C" {
+#include <bpf/bpf.h>
+#include <bpf/libbpf.h>
+}
 #include "resource_skill.h"
+#include "resource_skill.skel.h"
 
 namespace arca {
 
@@ -24,10 +30,22 @@ static bool write_val(const std::string &path, uint64_t v)
 
 int ResourceControlSkill::init()
 {
+    /* cgroup detection */
     if (access("/sys/fs/cgroup/memory.current", R_OK) == 0)
-        cgroup_path_ = "/sys/fs/cgroup";           /* v2 */
+        cgroup_path_ = "/sys/fs/cgroup";
     else if (access("/sys/fs/cgroup/memory/memory.usage_in_bytes", R_OK) == 0)
-        cgroup_path_ = "/sys/fs/cgroup/memory";    /* v1 */
+        cgroup_path_ = "/sys/fs/cgroup/memory";
+
+    /* load eBPF for resource monitoring */
+    struct resource_skill *skel = resource_skill__open();
+    if (skel) {
+        if (resource_skill__load(skel) == 0 && resource_skill__attach(skel) == 0) {
+            counters_fd_ = bpf_map__fd(skel->maps.res_counters);
+            bpf_obj_ = (struct bpf_object *)skel;
+        } else {
+            resource_skill__destroy(skel);
+        }
+    }
     return 0;
 }
 
@@ -41,6 +59,7 @@ int ResourceControlSkill::start()
 int ResourceControlSkill::stop()
 {
     running_ = false;
+    if (bpf_obj_) { resource_skill__destroy((struct resource_skill *)bpf_obj_); bpf_obj_ = nullptr; }
     return 0;
 }
 
@@ -75,6 +94,23 @@ int ResourceControlSkill::collect()
     prev_busy = busy;
 
     stats_.oom_count = read_val(cgroup_path_ + "/memory.events");
+
+    /* read eBPF counters */
+    if (counters_fd_ >= 0) {
+        int nr_cpus = libbpf_num_possible_cpus();
+        u64 vals[4 * nr_cpus];
+        u32 idx;
+        for (idx = 0; idx < 4; idx++) {
+            if (bpf_map_lookup_elem(counters_fd_, &idx, &vals[idx * nr_cpus]) == 0) {
+                u64 sum = 0;
+                for (int i = 0; i < nr_cpus; i++) sum += vals[idx * nr_cpus + i];
+                switch (idx) {
+                case 0: stats_.page_allocs = sum; break;
+                case 1: stats_.block_ios = sum; break;
+                }
+            }
+        }
+    }
 
     /* write to shared store */
     if (store_) {
@@ -131,6 +167,8 @@ std::vector<SkillMetrics> ResourceControlSkill::metrics()
         {"io_read",  (double)stats_.io_read_kb, "KB",  "IO read"},
         {"io_write", (double)stats_.io_write_kb, "KB",  "IO write"},
         {"oom",      (double)stats_.oom_count, "cnt",  "OOM events"},
+        {"page_alloc", (double)stats_.page_allocs, "cnt", "Page allocs"},
+        {"block_io",   (double)stats_.block_ios, "cnt",  "Block I/O"},
     };
 }
 

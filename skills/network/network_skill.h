@@ -37,7 +37,7 @@ private:
     int block_fd_;
 
     uint64_t total_tx_ = 0, total_rx_ = 0;
-    uint64_t total_blocked_ = 0;
+    uint64_t total_blocked_ = 0, total_retransmit_ = 0, total_connects_ = 0;
     std::unordered_map<uint32_t, net_flow_info> flows_;
 
     static int handle_event_cb(void *ctx, void *data, size_t sz);

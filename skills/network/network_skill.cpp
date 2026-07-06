@@ -32,9 +32,12 @@ int NetworkPolicySkill::handle_event_cb(void *ctx, void *data, size_t sz)
     f.last_seen = e->timestamp;
     f.total_events++;
 
-    if (e->is_tx) {
+    if (e->is_tx == 1) {
         f.tx_bytes += e->bytes;
         s->total_tx_ += e->bytes;
+    } else if (e->is_tx == 2) {
+        f.rx_bytes += 1;  /* count retransmit as an event */
+        s->total_retransmit_++;
     } else {
         f.rx_bytes += e->bytes;
         s->total_rx_ += e->bytes;
@@ -134,6 +137,8 @@ std::vector<SkillMetrics> NetworkPolicySkill::metrics()
         {"rx_bytes",   (double)total_rx_, "B",   "RX bytes"},
         {"flows",      (double)flows_.size(), "cnt",  "Active flows"},
         {"blocked",    (double)total_blocked_, "cnt", "Blocked PIDs"},
+        {"retransmit", (double)total_retransmit_, "cnt", "Retransmits"},
+        {"connects",   (double)total_connects_, "cnt", "New connections"},
     };
 }
 
