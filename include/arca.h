@@ -7,14 +7,6 @@
 #define TASK_RUNNING            0
 #define TASK_INTERRUPTIBLE      1
 #define TASK_UNINTERRUPTIBLE    2
-#define TASK_NEW                8
-#define TASK_DEAD               16
-
-enum arca_event_type {
-    ARCA_EVENT_SWITCH = 1,
-    ARCA_EVENT_WAKEUP = 2,
-    ARCA_EVENT_BLOCK   = 3,
-};
 
 enum arca_task_class {
     ARCA_CLASS_UNKNOWN     = 0,

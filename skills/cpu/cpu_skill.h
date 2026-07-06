@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <cstdint>
 #include <ctime>
+#include <string>
 
 extern "C" {
 #include <bpf/bpf.h>
@@ -54,11 +55,9 @@ class CPUSchedSkill : public Skill {
 public:
     CPUSchedSkill(const Config &cfg, SharedStore *store = nullptr)
         : Skill("CPUSched", SkillType::CPU_SCHED),
-        trace_obj_(nullptr), rb_(nullptr), scx_state_(nullptr),
+        trace_obj_(nullptr), scx_state_(nullptr),
         class_map_fd_(-1), stats_map_fd_(-1),
-        store_(store), event_count_(0), last_snapshot_ts_(0) {
-        cfg_ = cfg;
-    }
+        store_(store), event_count_(0), last_snapshot_ts_(0) {}
 
     int init() override;
     int start() override;
@@ -66,12 +65,10 @@ public:
     int collect() override;
     int policy() override;
     int act() override;
-
     std::vector<SkillMetrics> metrics() override;
 
 private:
     struct bpf_object *trace_obj_;
-    struct ring_buffer *rb_;
     void *scx_state_;
     int class_map_fd_;
     int stats_map_fd_;
@@ -80,12 +77,9 @@ private:
 
     uint64_t event_count_;
     time_t last_snapshot_ts_;
-
     std::unordered_map<uint32_t, task_features> features_;
     std::unordered_map<uint32_t, task_snapshot> snapshots_;
     int classified_[5] = {};
-
-    static int handle_event_cb(void *ctx, void *data, size_t sz);
 
     void compute_features();
     classify_score score_task(const task_features &feat);
