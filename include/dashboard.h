@@ -67,13 +67,14 @@ private:
             if (s->type() != SkillType::CPU_SCHED) continue;
 
             auto m = s->metrics();
-            uint64_t events = 0, tasks = 0, inter = 0, cpu_b = 0, batch = 0;
+            uint64_t events = 0, tasks = 0, inter = 0, cpu_b = 0, batch = 0, io_b = 0;
             for (auto &mt : m) {
                 if (mt.name == "events")      events = (uint64_t)mt.value;
                 if (mt.name == "tasks")       tasks  = (uint64_t)mt.value;
                 if (mt.name == "interactive") inter  = (uint64_t)mt.value;
                 if (mt.name == "cpu_bound")   cpu_b  = (uint64_t)mt.value;
                 if (mt.name == "batch")       batch  = (uint64_t)mt.value;
+                if (mt.name == "io_bound")    io_b   = (uint64_t)mt.value;
             }
 
             uint64_t new_events = events - prev_event_count_;
@@ -129,6 +130,11 @@ private:
             set_color("1;33"); printf("%-12s", "BATCH");
             printf(" ");
             set_color("1;33"); printf("%3lu", batch);
+            reset(); printf("  ");
+
+            set_color("0;35"); printf("%-12s", "IO_BOUND");
+            printf(" ");
+            set_color("0;35"); printf("%3lu", io_b);
             reset(); printf("\n\n");
 
             /* bar chart */
@@ -137,12 +143,14 @@ private:
                 int i_w = inter * w / total;
                 int c_w = cpu_b * w / total;
                 int b_w = batch * w / total;
+                int o_w = io_b  * w / total;
                 int u_w = unk   * w / total;
 
                 printf("  ");
                 set_color("42"); for (int i = 0; i < i_w && i < w; i++) printf(" "); reset();
                 set_color("41"); for (int i = 0; i < c_w && i < w; i++) printf(" "); reset();
                 set_color("43"); for (int i = 0; i < b_w && i < w; i++) printf(" "); reset();
+                set_color("45"); for (int i = 0; i < o_w && i < w; i++) printf(" "); reset();
                 set_color("47"); for (int i = 0; i < u_w && i < w; i++) printf(" "); reset();
                 printf("\n\n");
             }

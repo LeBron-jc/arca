@@ -26,6 +26,13 @@ struct {
     __type(value, struct arca_stats_val);
 } task_stats SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(key_size, sizeof(u32));
+    __uint(value_size, sizeof(u64));
+    __uint(max_entries, 4);
+} cpu_load SEC(".maps");
+
 struct sched_switch_args {
     unsigned short common_type;
     unsigned char common_flags;
@@ -51,7 +58,7 @@ struct sched_wakeup_args {
     int target_cpu;
 };
 
-static void track_start(u32 pid, u64 tgid, u32 cpu, const char *comm)
+static void track_start(u32 pid, u64 tgid, u32 cpu, const char *comm, int nice_val)
 {
     struct arca_stats_key key = { .pid = pid, .tgid = tgid };
     struct arca_stats_val *val;
@@ -63,6 +70,7 @@ static void track_start(u32 pid, u64 tgid, u32 cpu, const char *comm)
         new_val.last_run_start_ns = now;
         new_val.last_cpu = cpu;
         new_val.switch_count = 1;
+        new_val.nice = nice_val;
         if (comm) bpf_probe_read_kernel_str(new_val.comm, sizeof(new_val.comm), comm);
         bpf_map_update_elem(&task_stats, &key, &new_val, BPF_ANY);
     } else {
@@ -71,7 +79,6 @@ static void track_start(u32 pid, u64 tgid, u32 cpu, const char *comm)
             val->cpu_migrations++;
         val->last_cpu = cpu;
         val->switch_count++;
-        /* update comm if changed */
         if (comm && val->comm[0] == 0)
             bpf_probe_read_kernel_str(val->comm, sizeof(val->comm), comm);
     }
@@ -91,7 +98,6 @@ static void track_wakeup(u32 pid, u64 tgid, const char *comm)
         if (comm) bpf_probe_read_kernel_str(new_val.comm, sizeof(new_val.comm), comm);
         bpf_map_update_elem(&task_stats, &key, &new_val, BPF_ANY);
     } else {
-        /* measure wait time since last wake */
         if (val->last_wake_ns && now > val->last_wake_ns) {
             u64 wait_ns = now - val->last_wake_ns;
             if (wait_ns < 60000000000ULL)
@@ -110,21 +116,40 @@ int handle_sched_switch(struct sched_switch_args *ctx)
     u32 cpu = bpf_get_smp_processor_id();
     u32 prev_pid = ctx->prev_pid;
     u32 next_pid = ctx->next_pid;
+    long prev_state = ctx->prev_state;
+
+    /* update per-CPU load counter */
+    u32 zero = 0;
+    u64 *load = bpf_map_lookup_elem(&cpu_load, &zero);
+    if (load) __sync_fetch_and_add(load, 1);
 
     /* prev task stopped */
     if (prev_pid) {
         struct arca_stats_key key = { .pid = prev_pid };
         struct arca_stats_val *val = bpf_map_lookup_elem(&task_stats, &key);
         u64 run_ns = 0;
+
         if (val && val->last_run_start_ns) {
             u64 now = bpf_ktime_get_ns();
             run_ns = now - val->last_run_start_ns;
             if (run_ns < 60000000000ULL) {
                 val->total_run_ns += run_ns;
                 val->last_run_start_ns = 0;
+                val->switch_count++;
             }
         }
-        /* emit event with runtime info */
+
+        /* classify prev task's state: I/O wait, D-state, or preempt */
+        if (val) {
+            if (prev_state & TASK_UNINTERRUPTIBLE)
+                val->d_state_count++;
+            else if (prev_state & TASK_INTERRUPTIBLE)
+                val->io_wait_count++;
+            else if (prev_state == TASK_RUNNING)
+                val->preempt_count++;
+        }
+
+        /* emit event */
         struct arca_task_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
         if (e) {
             __builtin_memset(e, 0, sizeof(*e));
@@ -142,7 +167,7 @@ int handle_sched_switch(struct sched_switch_args *ctx)
 
     /* next task started */
     if (next_pid) {
-        track_start(next_pid, 0, cpu, ctx->next_comm);
+        track_start(next_pid, 0, cpu, ctx->next_comm, ctx->next_prio);
     }
 
     return 0;
@@ -157,7 +182,6 @@ int handle_sched_wakeup(struct sched_wakeup_args *ctx)
 
     track_wakeup(ctx->pid, 0, ctx->comm);
 
-    /* emit event */
     struct arca_task_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (e) {
         __builtin_memset(e, 0, sizeof(*e));

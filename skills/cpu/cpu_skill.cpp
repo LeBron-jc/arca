@@ -96,13 +96,18 @@ void CPUSchedSkill::compute_features()
         uint32_t delta_wake = val.wakeup_count - snap.prev_wakeup;
         uint32_t delta_switch = val.switch_count - snap.prev_switch;
         uint32_t delta_migrate = val.cpu_migrations - snap.prev_migration;
+        uint32_t delta_io_wait = val.io_wait_count - snap.prev_io_wait;
+        uint32_t delta_d_state = val.d_state_count - snap.prev_d_state;
 
         feat.avg_run_ns  = (feat.avg_run_ns * 7 + delta_run / (delta_switch ? delta_switch : 1)) / 8;
         feat.avg_wait_ns = (feat.avg_wait_ns * 7 + delta_wait / (delta_wake ? delta_wake : 1)) / 8;
         feat.wakeup_rate = delta_wake;
         feat.switch_rate = delta_switch;
         feat.migration_rate = delta_migrate;
+        feat.io_wait_count = delta_io_wait;
+        feat.d_state_count = delta_d_state;
         feat.is_kthread  = val.is_kthread;
+        feat.nice = val.nice;
         memcpy(feat.comm, val.comm, 16);
 
         snap.prev_run_ns    = val.total_run_ns;
@@ -110,6 +115,8 @@ void CPUSchedSkill::compute_features()
         snap.prev_wakeup    = val.wakeup_count;
         snap.prev_switch    = val.switch_count;
         snap.prev_migration = val.cpu_migrations;
+        snap.prev_io_wait   = val.io_wait_count;
+        snap.prev_d_state   = val.d_state_count;
 
         prev_key = key;
     }
@@ -128,8 +135,18 @@ classify_score CPUSchedSkill::score_task(const task_features &feat)
     double switch_rate = (double)feat.switch_rate;
     double avg_run_ms = feat.avg_run_ns / 1000000.0;
     double avg_wait_ms = feat.avg_wait_ns / 1000000.0;
+    double io_ratio = (feat.io_wait_count + feat.d_state_count) /
+                      (double)(feat.switch_rate ? feat.switch_rate : 1);
 
     double min_score = cfg_.get_double("cpu.interactive_min_score", 0.4);
+
+    /* IO_BOUND first: high I/O wait ratio means task spends time waiting for I/O, not CPU */
+    if (io_ratio > 0.5 && avg_run_ms < 5.0)
+        s.io_bound = min_score * 1.2;
+    if (io_ratio > 0.3 && feat.d_state_count > 0)
+        s.io_bound += min_score * 0.6;
+    if (io_ratio > 0.7)
+        s.io_bound += min_score * 0.6;
 
     /* INTERACTIVE: high wakeup rate, short run times, low wait times */
     if (wake_rate >= 3 && avg_run_ms < 5.0 && avg_wait_ms < 20.0)
@@ -138,19 +155,22 @@ classify_score CPUSchedSkill::score_task(const task_features &feat)
         s.interactive += min_score * 0.75;
     if (wake_rate >= 10 && avg_run_ms < 1.0)
         s.interactive += min_score * 0.75;
+    /* boost high-priority (negative nice) interactive tasks */
+    if (s.interactive > 0 && feat.nice < -5)
+        s.interactive += 0.2;
 
     min_score = cfg_.get_double("cpu.cpu_bound_min_score", 0.4);
-    /* CPU_BOUND: low wakeup rate, long run times, few migrations */
-    if (wake_rate <= 2 && avg_run_ms > 10.0)
+    /* CPU_BOUND: low wakeup rate, long run times, few migrations, NOT I/O bound */
+    if (wake_rate <= 2 && avg_run_ms > 10.0 && io_ratio < 0.3)
         s.cpu_bound = min_score * 1.0;
     if (wake_rate <= 1 && avg_run_ms > 50.0 && feat.migration_rate <= 2)
         s.cpu_bound += min_score * 0.75;
-    if (switch_rate >= 10 && wake_rate <= 1)
+    if (switch_rate >= 10 && wake_rate <= 1 && io_ratio < 0.2)
         s.cpu_bound += min_score * 0.75;
 
     min_score = cfg_.get_double("cpu.batch_min_score", 0.4);
     /* BATCH: moderate wakeup, long runs, regular pattern */
-    if (avg_run_ms > 5.0 && wake_rate <= 3)
+    if (avg_run_ms > 5.0 && wake_rate <= 3 && io_ratio < 0.4)
         s.batch = min_score * 0.75;
     if (avg_run_ms > 20.0 && wake_rate <= 5)
         s.batch += min_score * 0.75;
@@ -179,6 +199,7 @@ void CPUSchedSkill::apply_classification()
         if (sc.interactive > best) { best = sc.interactive; new_cls = ARCA_CLASS_INTERACTIVE; }
         if (sc.cpu_bound > best) { best = sc.cpu_bound; new_cls = ARCA_CLASS_CPU_BOUND; }
         if (sc.batch > best) { best = sc.batch; new_cls = ARCA_CLASS_BATCH; }
+        if (sc.io_bound > best) { best = sc.io_bound; new_cls = ARCA_CLASS_IO_BOUND; }
 
         if (new_cls != ARCA_CLASS_UNKNOWN && new_cls != snap.cls && best >= 0.4) {
             snap.cls = new_cls;
@@ -198,6 +219,7 @@ void CPUSchedSkill::apply_classification()
         store_->put_int("cpu.interactive", classified_[1]);
         store_->put_int("cpu.cpu_bound", classified_[2]);
         store_->put_int("cpu.batch", classified_[3]);
+        store_->put_int("cpu.io_bound", classified_[4]);
 
         /* top 10 active tasks */
         std::ostringstream top;
@@ -211,6 +233,9 @@ void CPUSchedSkill::apply_classification()
             if (fit != features_.end()) {
                 top << " avg_run_ms=" << (fit->second.avg_run_ns / 1000000.0)
                     << " wakeup_rate=" << fit->second.wakeup_rate
+                    << " io_ratio=" << ((fit->second.io_wait_count + fit->second.d_state_count) /
+                                       (double)(fit->second.switch_rate ? fit->second.switch_rate : 1))
+                    << " nice=" << fit->second.nice
                     << " migration=" << fit->second.migration_rate
                     << " is_kthread=" << fit->second.is_kthread;
             }
@@ -249,6 +274,7 @@ std::vector<SkillMetrics> CPUSchedSkill::metrics()
         {"interactive",  (double)classified_[1], "cnt", "INTERACTIVE"},
         {"cpu_bound",    (double)classified_[2], "cnt", "CPU_BOUND"},
         {"batch",        (double)classified_[3], "cnt", "BATCH"},
+        {"io_bound",     (double)classified_[4], "cnt", "IO_BOUND"},
     };
 }
 

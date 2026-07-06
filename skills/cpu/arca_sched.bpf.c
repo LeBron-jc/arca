@@ -83,6 +83,7 @@ void BPF_STRUCT_OPS(arca_enqueue, struct task_struct *p, u64 enq_flags)
     if (c == ARCA_CLASS_INTERACTIVE)      stat_inc(0);
     else if (c == ARCA_CLASS_CPU_BOUND)   stat_inc(1);
     else if (c == ARCA_CLASS_BATCH)       stat_inc(2);
+    else if (c == ARCA_CLASS_IO_BOUND)    stat_inc(3);
 }
 
 void BPF_STRUCT_OPS(arca_dispatch, s32 cpu, struct task_struct *prev)

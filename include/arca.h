@@ -3,6 +3,13 @@
 
 #define ARCA_TASK_COMM_LEN 16
 
+/* sched_switch prev_state bits */
+#define TASK_RUNNING            0
+#define TASK_INTERRUPTIBLE      1
+#define TASK_UNINTERRUPTIBLE    2
+#define TASK_NEW                8
+#define TASK_DEAD               16
+
 enum arca_event_type {
     ARCA_EVENT_SWITCH = 1,
     ARCA_EVENT_WAKEUP = 2,
@@ -14,9 +21,9 @@ enum arca_task_class {
     ARCA_CLASS_INTERACTIVE = 1,
     ARCA_CLASS_CPU_BOUND   = 2,
     ARCA_CLASS_BATCH       = 3,
+    ARCA_CLASS_IO_BOUND    = 4,
 };
 
-/* lightweight ringbuffer event */
 struct arca_task_event {
     unsigned int pid;
     unsigned int tgid;
@@ -47,6 +54,10 @@ struct arca_stats_val {
     unsigned int last_cpu;
     unsigned int cpu_migrations;
     unsigned int is_kthread;
+    unsigned int io_wait_count;
+    unsigned int d_state_count;
+    unsigned int preempt_count;
+    int nice;
     char comm[ARCA_TASK_COMM_LEN];
 };
 

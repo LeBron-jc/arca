@@ -25,6 +25,9 @@ struct task_features {
     uint32_t switch_rate;
     uint32_t migration_rate;
     uint32_t is_kthread;
+    uint32_t io_wait_count;
+    uint32_t d_state_count;
+    int nice;
     char comm[16];
 };
 
@@ -34,6 +37,8 @@ struct task_snapshot {
     uint32_t prev_wakeup;
     uint32_t prev_switch;
     uint32_t prev_migration;
+    uint32_t prev_io_wait;
+    uint32_t prev_d_state;
     enum arca_task_class cls;
     double confidence;
 };
@@ -42,6 +47,7 @@ struct classify_score {
     double interactive;
     double cpu_bound;
     double batch;
+    double io_bound;
 };
 
 class CPUSchedSkill : public Skill {
@@ -77,7 +83,7 @@ private:
 
     std::unordered_map<uint32_t, task_features> features_;
     std::unordered_map<uint32_t, task_snapshot> snapshots_;
-    int classified_[4] = {};
+    int classified_[5] = {};
 
     static int handle_event_cb(void *ctx, void *data, size_t sz);
 
