@@ -1,19 +1,18 @@
-KERNEL_SRC := /lib/modules/$(shell uname -r)/build
-CLANG     := /tmp/opencode/scx-build/local/usr/bin/clang
-CLANGXX   := /tmp/opencode/scx-build/local/usr/bin/clang++
-BPFTOOL   := /tmp/opencode/scx-build/bpftool/bpftool
-LD_LIBS   := /tmp/opencode/scx-build/local/usr/lib64
-LOCAL_PFX := /tmp/opencode/scx-build/local
-
-BUILD_DIR   := /tmp/opencode/scx-build/build
+KERNEL_SRC ?= /lib/modules/$(shell uname -r)/build
+CLANG     ?= /tmp/opencode/scx-build/local/usr/bin/clang
+CLANGXX   ?= /tmp/opencode/scx-build/local/usr/bin/clang++
+BPFTOOL   ?= /tmp/opencode/scx-build/bpftool/bpftool
+LD_LIBS   ?= /tmp/opencode/scx-build/local/usr/lib64
+LOCAL_PFX ?= /tmp/opencode/scx-build/local
+BUILD_DIR ?= /tmp/opencode/scx-build/build
 SCX_INC     := $(KERNEL_SRC)/tools/sched_ext/include
 SCX_BPF_INC := $(SCX_INC)/bpf-compat
 TOOLS_INC   := $(KERNEL_SRC)/tools/include
 TOOLS_UAPI  := $(TOOLS_INC)/uapi
 GEN_INC     := $(KERNEL_SRC)/include/generated
-VMLINUX_H   := $(BUILD_DIR)/include/vmlinux.h
+VMLINUX_H   ?= $(BUILD_DIR)/include/vmlinux.h
 VMLINUX_DIR := $(dir $(VMLINUX_H))
-LIBBPF_A    := $(BUILD_DIR)/obj/libbpf/libbpf.a
+LIBBPF_A    ?= $(BUILD_DIR)/obj/libbpf/libbpf.a
 LIBBPF_INC  := $(BUILD_DIR)/include
 CLANG_INC   := $(LD_LIBS)/clang/17/include
 
