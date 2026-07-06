@@ -2,84 +2,34 @@ name: CPUSched
 version: "1.0"
 category: scheduling
 description: >
-  CPU调度优化Agent。通过eBPF tracepoint感知workload行为模式，
-  利用sched_ext进行vtime加权公平调度，对INTERACTIVE任务执行
-  抢占式立即调度，降低交互式工作负载的唤醒延迟。
+  CPU调度Agent。12个eBPF hook感知workload运行态，
+  数据通过SharedStore上报LLM，LLM输出per-PID优先级(-100~+100)，
+  SCX将优先级映射为vtime偏移和抢占行为。
+  LLM未就绪时所有任务以normal优先级运行。
 
 workload_perception:
-  method: eBPF tracepoint
+  method: eBPF tracepoint (6 hooks)
   events:
-    - sched_switch  # 上下文切换 → 运行时长统计
-    - sched_wakeup  # 任务唤醒 → 唤醒频率统计
-  features:
-    - avg_runtime_ns    # 平均单次运行时长
-    - avg_wait_time_ns   # 平均等待时长
-    - wakeup_rate        # 唤醒频率
-    - switch_count       # 调度次数
-    - cpu_migration_count # CPU迁移次数
-
-classification:
-  method: scoring_based
-  classes:
-    - name: INTERACTIVE
-      score: high_wakeup + short_runtime + low_wait
-      description: 交互式应用（Shell、编辑器、GUI）
-    - name: CPU_BOUND
-      score: low_wakeup + long_runtime + few_migration
-      description: 计算密集型（编译、视频编码、科学计算）
-    - name: BATCH
-      score: moderate_wakeup + long_runtime + regular_pattern
-      description: 批处理（日志处理、ETL、定时任务）
+    - sched_switch     → runtime, io_wait, d_state, preempt, cpu_migration
+    - sched_wakeup     → wakeup_count, wakeup_interval
+    - sched_stat_blocked → I/O blocked time (ns)
+    - sched_stat_runtime → kernel-measured CPU time
+    - sched_stat_wait    → run queue wait time
+    - sched_process_fork → parent/child tracking
 
 scheduling:
   engine: sched_ext (SCX)
-  method: vtime_weighted_fair_queuing
-  priority:
-    INTERACTIVE:
-      select_cpu: idle_first + SCX_DSQ_LOCAL + SCX_KICK_PREEMPT
-      slice: 1ms
-    CPU_BOUND:
-      select_cpu: cache_affinity (prev_cpu)
-      slice: 10ms
-    BATCH:
-      select_cpu: any
-      slice: 20ms
-  dsq: SHARED_DSQ (vtime ordered)
+  method: priority-based vtime + preempt
+  priority_scale: -100 (lowest) to +100 (highest)
+  select_cpu: priority >= 80 → pick_idle_cpu + SCX_DSQ_LOCAL + SCX_KICK_PREEMPT
+  enqueue: vtime -= priority * slice / 10
+  dispatch: single SHARED_DSQ, vtime-ordered consumption
+  running/stopping: vtime accounting with weight
 
-parameters:
-  - name: interactive_min_score
-    type: double
-    range: [0.0, 1.0]
-    default: 0.4
-    description: INTERACTIVE分类最低置信度
-  - name: interactive_slice_us
-    type: int
-    range: [100, 10000]
-    default: 1000
-    description: INTERACTIVE时间片(微秒)
-  - name: cpu_bound_slice_us
-    type: int
-    range: [1000, 100000]
-    default: 10000
-    description: CPU_BOUND时间片(微秒)
-  - name: batch_slice_us
-    type: int
-    range: [1000, 100000]
-    default: 20000
-    description: BATCH时间片(微秒)
-  - name: decay_ratio
-    type: double
-    range: [0.5, 0.95]
-    default: 0.75
-    description: 统计衰减系数
-
-metrics:
-  - name: interactive_latency_us
-    description: 交互式任务平均唤醒延迟
-  - name: events_per_second
-    description: eBPF事件采集速率
-  - name: classified_tasks
-    description: 已分类任务数（按类型分布）
+decision:
+  source: LLMDecisionSkill (unified engine)
+  format: PRIORITY: pid=X value=Y reason=Z
+  fallback: all tasks at priority 0 (fair vtime scheduling)
 
 kernel_requirements:
   min_version: "6.6"

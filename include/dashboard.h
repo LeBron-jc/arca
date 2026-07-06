@@ -12,7 +12,7 @@ namespace arca {
 
 class Dashboard {
 public:
-    Dashboard() : height_(40), width_(120), prev_event_count_(0), prev_time_(0) {}
+    Dashboard() : height_(40), width_(120) {}
 
     void render(SkillManager &mgr) {
         get_terminal_size();
@@ -29,8 +29,6 @@ public:
 
 private:
     int height_, width_;
-    uint64_t prev_event_count_;
-    time_t prev_time_;
 
     void get_terminal_size() {
         struct winsize w;
@@ -67,30 +65,12 @@ private:
             if (s->type() != SkillType::CPU_SCHED) continue;
 
             auto m = s->metrics();
-            uint64_t events = 0, tasks = 0, inter = 0, cpu_b = 0, batch = 0, io_b = 0;
+            uint64_t tasks = 0;
             for (auto &mt : m) {
-                if (mt.name == "events")      events = (uint64_t)mt.value;
                 if (mt.name == "tasks")       tasks  = (uint64_t)mt.value;
-                if (mt.name == "interactive") inter  = (uint64_t)mt.value;
-                if (mt.name == "cpu_bound")   cpu_b  = (uint64_t)mt.value;
-                if (mt.name == "batch")       batch  = (uint64_t)mt.value;
-                if (mt.name == "io_bound")    io_b   = (uint64_t)mt.value;
             }
 
-            uint64_t new_events = events - prev_event_count_;
-            time_t now = time(NULL);
-            double rate = 0;
-            if (prev_time_ > 0 && now > prev_time_) {
-                rate = (double)new_events / difftime(now, prev_time_);
-            }
-            prev_event_count_ = events;
-            prev_time_ = now;
-
-            printf("  Events: ");
-            set_color("1;37"); printf("%lu", events); reset();
-            printf("  (");
-            set_color("1;32"); printf("%.0f/s", rate); reset();
-            printf(")  |  Tasks: ");
+            printf("  Tasks: ");
             set_color("1;37"); printf("%lu", tasks); reset();
             printf("  |  SCX: ");
             FILE *f = fopen("/sys/kernel/sched_ext/state", "r");
@@ -106,54 +86,6 @@ private:
                 fclose(f);
             }
             reset(); printf("\n\n");
-
-            printf("  ");
-            int total = inter + cpu_b + batch;
-            int unk = (int)tasks - total;
-            if (unk < 0) unk = 0;
-
-            set_color("0;37"); printf("%-10s", "UNKNOWN");
-            printf(" ");
-            set_color("0;36"); printf("%3d", unk);
-            reset(); printf("  ");
-
-            set_color("1;32"); printf("%-12s", "INTERACTIVE");
-            printf(" ");
-            set_color("1;32"); printf("%3lu", inter);
-            reset(); printf("  ");
-
-            set_color("1;31"); printf("%-12s", "CPU_BOUND");
-            printf(" ");
-            set_color("1;31"); printf("%3lu", cpu_b);
-            reset(); printf("  ");
-
-            set_color("1;33"); printf("%-12s", "BATCH");
-            printf(" ");
-            set_color("1;33"); printf("%3lu", batch);
-            reset(); printf("  ");
-
-            set_color("0;35"); printf("%-12s", "IO_BOUND");
-            printf(" ");
-            set_color("0;35"); printf("%3lu", io_b);
-            reset(); printf("\n\n");
-
-            /* bar chart */
-            if (total > 0) {
-                int w = width_ - 4;
-                int i_w = inter * w / total;
-                int c_w = cpu_b * w / total;
-                int b_w = batch * w / total;
-                int o_w = io_b  * w / total;
-                int u_w = unk   * w / total;
-
-                printf("  ");
-                set_color("42"); for (int i = 0; i < i_w && i < w; i++) printf(" "); reset();
-                set_color("41"); for (int i = 0; i < c_w && i < w; i++) printf(" "); reset();
-                set_color("43"); for (int i = 0; i < b_w && i < w; i++) printf(" "); reset();
-                set_color("45"); for (int i = 0; i < o_w && i < w; i++) printf(" "); reset();
-                set_color("47"); for (int i = 0; i < u_w && i < w; i++) printf(" "); reset();
-                printf("\n\n");
-            }
         }
     }
 

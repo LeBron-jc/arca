@@ -2,60 +2,21 @@ name: ResourceCtrl
 version: "1.0"
 category: resource
 description: >
-  资源管控Agent。通过/proc和cgroup文件系统实时监控系统级
-  内存、CPU、IO和OOM事件，超阈值自动应用cgroup限制策略。
+  资源管控Agent。2个kprobe+eBPF监控页面分配和磁盘I/O，
+  配合/proc采集系统级内存/CPU。LLM根据压力输出THROTTLE指令，
+  执行端动态创建per-PID cgroup子目录并迁移进程实施硬限制。
 
-workload_perception:
-  method: system_filesystem
-  sources:
-    - /proc/meminfo       # 系统内存使用
-    - /proc/stat          # CPU使用率（delta计算）
-    - /sys/fs/cgroup/*    # cgroup v1/v2 子系统
-  features:
-    - memory_usage_mb      # 已用内存（Total - Available）
-    - cpu_usage_percent    # CPU使用率
-    - oom_event_count      # OOM事件计数
-    - io_read_bytes        # IO读取量
-    - io_write_bytes       # IO写入量
+hooks:
+  - __alloc_pages_nodemask → 页面分配频率
+  - block_rq_issue         → 磁盘I/O次数
+  - /proc/meminfo          → 系统内存使用
+  - /proc/stat             → CPU使用率
 
-policy:
-  memory_alert:
-    trigger: memory_usage > threshold_mb
-    status: "ALERT: high memory"
-    action: >
-      写入cgroup memory.max为阈值的90%，
-      限制后续内存分配
-  cpu_alert:
-    trigger: cpu_usage > threshold_pct
-    status: "ALERT: high CPU"
-    action: >
-      写入cgroup cpu.max为50000(50%单核)，
-      限制CPU占用
+control:
+  method: per-PID cgroup子目录 + memory.max / cpu.max
+  trigger: LLM输出 THROTTLE:type=mem|cpu value=N
+  isolation: mkdir + echo限制值 + echo迁移进程
 
-parameters:
-  - name: memory_alert_mb
-    type: int
-    default: 6144
-    description: 内存告警阈值(MB)
-  - name: cpu_alert_pct
-    type: int
-    range: [1, 100]
-    default: 95
-    description: CPU告警阈值(%)
-
-metrics:
-  - name: mem_usage_mb
-    description: 当前内存使用(MB)
-  - name: cpu_usage_pct
-    description: 当前CPU使用率(%)
-  - name: oom_events
-    description: OOM事件计数
-
-kernel_requirements:
-  min_version: "4.0"
-  features:
-    - cgroup_v1 or cgroup_v2
-  
-notes: |
-  cgroup路径自动检测(v1/v2)。cgroup写入需要root权限。
-  在非特权容器中act()可能静默失败。
+decision:
+  source: LLMDecisionSkill
+  format: THROTTLE: type=mem|cpu value=N reason=Z

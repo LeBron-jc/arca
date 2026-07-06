@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <sys/stat.h>
 #include <unistd.h>
 
 extern "C" {
