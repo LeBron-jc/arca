@@ -6,6 +6,7 @@ char _license[] SEC("license") = "GPL";
 
 struct exec_event {
     u32 pid;
+    u32 old_pid;
     u64 timestamp;
     char comm[16];
     char filename[64];
@@ -23,31 +24,39 @@ struct {
     __type(value, u64);
 } alert_counter SEC(".maps");
 
-SEC("kprobe/__x64_sys_execve")
-int kprobe_exec(struct pt_regs *ctx)
-{
-    u32 pid = bpf_get_current_pid_tgid() >> 32;
-    struct exec_event *e;
+struct sched_exec_args {
+    unsigned short common_type;
+    unsigned char common_flags;
+    unsigned char common_preempt_count;
+    int common_pid;
+    char filename[16];
+    int pid;
+    int old_pid;
+};
 
-    e = bpf_ringbuf_reserve(&sec_events, sizeof(*e), 0);
+SEC("tp/sched/sched_process_exec")
+int trace_exec(struct sched_exec_args *ctx)
+{
+    u32 zero = 0;
+    u64 *cnt = bpf_map_lookup_elem(&alert_counter, &zero);
+    if (cnt) __sync_fetch_and_add(cnt, 1);
+
+    struct exec_event *e = bpf_ringbuf_reserve(&sec_events, sizeof(*e), 0);
     if (!e) return 0;
 
-    e->pid = pid;
+    e->pid = ctx->pid;
+    e->old_pid = ctx->old_pid;
     e->timestamp = bpf_ktime_get_ns();
     bpf_get_current_comm(&e->comm, sizeof(e->comm));
 
-    char *filename = (char *)PT_REGS_PARM1(ctx);
-    bpf_probe_read_user_str(e->filename, sizeof(e->filename), filename);
+    /* best-effort filename from the filename field (truncated to 16 in tp) */
+    __builtin_memset(e->filename, 0, sizeof(e->filename));
+    bpf_probe_read_kernel_str(e->filename, 16, ctx->filename);
+
+    /* if filename wasn't captured by tracepoint, try getting it from task's comm */
+    if (e->filename[0] == 0)
+        bpf_probe_read_kernel_str(e->filename, sizeof(e->filename), e->comm);
 
     bpf_ringbuf_submit(e, 0);
-
-    /* alert on tmp/dev_shm execution */
-    if (e->filename[0] == '/' && e->filename[1] == 't' &&
-        e->filename[2] == 'm' && e->filename[3] == 'p') {
-        u32 zero = 0;
-        u64 *cnt = bpf_map_lookup_elem(&alert_counter, &zero);
-        if (cnt) __sync_fetch_and_add(cnt, 1);
-    }
-
     return 0;
 }

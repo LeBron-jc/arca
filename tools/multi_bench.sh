@@ -24,36 +24,41 @@ run() {
         cleanup
         sudo "$ROOT/bin/workload" -p "$profile" "$SECS" > "$RESULT_DIR/${profile}_cfs_$i.txt" 2>/dev/null
         echo -n "  CFS #$i:  "
-        grep "Interactive avg" "$RESULT_DIR/${profile}_cfs_$i.txt"
+        grep "Interactive avg\|p50\|p95\|p99" "$RESULT_DIR/${profile}_cfs_$i.txt" | head -4 | paste -sd'| '
 
         cleanup
         sudo LD_LIBRARY_PATH="$LD_PATH" "$ROOT/bin/arca" > /dev/null 2>&1 &
         sleep 4
         sudo "$ROOT/bin/workload" -p "$profile" "$SECS" > "$RESULT_DIR/${profile}_arca_$i.txt" 2>/dev/null
         echo -n "  ARCA #$i: "
-        grep "Interactive avg" "$RESULT_DIR/${profile}_arca_$i.txt"
+        grep "Interactive avg\|p50\|p95\|p99" "$RESULT_DIR/${profile}_arca_$i.txt" | head -4 | paste -sd'| '
         cleanup
     done
 }
 
 echo "ARCA Multi-Scenario Benchmark"
-echo "Profiles: web(2C+6I) db(3C+3I+2B) batch(4C+1I+3B) mixed(4C+2I+2B)"
 echo ""
 
 run "web"   "Web Server"
 run "db"    "Database"
 run "batch" "Batch Proc"
-run "mixed" "Mixed "
+run "mixed" "Mixed"
 
 echo ""
-echo "═══ Summary ═══"
-printf "%-8s %-10s %-10s %s\n" "Profile" "CFS(us)" "ARCA(us)" "Diff"
+echo "═══ Summary (Interactive Latency) ═══"
+printf "%-8s %-8s %-8s %-8s %-8s\n" "Profile" "Metric" "CFS" "ARCA" "Diff"
 for p in web db batch mixed; do
-    cfs=$(grep -h "Interactive avg" "$RESULT_DIR/${p}_cfs_"*.txt 2>/dev/null | grep -oP '[\d.]+' 2>/dev/null | awk '{s+=$1;n++}END{printf "%.0f",s/n}' || echo 0)
-    arca=$(grep -h "Interactive avg" "$RESULT_DIR/${p}_arca_"*.txt 2>/dev/null | grep -oP '[\d.]+' 2>/dev/null | awk '{s+=$1;n++}END{printf "%.0f",s/n}' || echo 0)
+    cfs_avg=$(grep -h "Interactive avg" "$RESULT_DIR/${p}_cfs_"*.txt 2>/dev/null | grep -oP '[\d.]+' | awk '{s+=$1;n++}END{printf "%.0f",s/n}')
+    arca_avg=$(grep -h "Interactive avg" "$RESULT_DIR/${p}_arca_"*.txt 2>/dev/null | grep -oP '[\d.]+' | awk '{s+=$1;n++}END{printf "%.0f",s/n}')
     diff="N/A"
-    [ "$cfs" != "0" ] && [ "$arca" != "0" ] && diff=$(awk "BEGIN{printf \"%+.0f%%\",($cfs-$arca)*100/$cfs}")
-    printf "%-8s %-10s %-10s %s\n" "$p" "${cfs}us" "${arca}us" "$diff"
+    [ "$cfs_avg" != "0" ] && [ "$arca_avg" != "0" ] && diff=$(awk "BEGIN{printf \"%+.0f%%\",($cfs_avg-$arca_avg)*100/$cfs_avg}")
+    printf "%-8s %-8s %-8s %-8s %-8s\n" "$p" "avg" "${cfs_avg}us" "${arca_avg}us" "$diff"
+
+    cfs_p99=$(grep -h "p99(us)" "$RESULT_DIR/${p}_cfs_"*.txt 2>/dev/null | grep -oP '[\d.]+' | head -1)
+    arca_p99=$(grep -h "p99(us)" "$RESULT_DIR/${p}_arca_"*.txt 2>/dev/null | grep -oP '[\d.]+' | head -1)
+    diff99="N/A"
+    [ -n "$cfs_p99" ] && [ -n "$arca_p99" ] && [ "$cfs_p99" != "0" ] && diff99=$(awk "BEGIN{printf \"%+.0f%%\",($cfs_p99-$arca_p99)*100/$cfs_p99}")
+    printf "%-8s %-8s %-8s %-8s %-8s\n" "$p" "p99" "${cfs_p99}us" "${arca_p99}us" "$diff99"
 done
 
 echo ""
